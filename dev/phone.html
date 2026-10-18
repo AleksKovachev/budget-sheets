@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phone view</title>
+  <script>
+    try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
+    // Follow theme changes made inside the frame.
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'bs.theme') document.documentElement.dataset.theme = e.newValue === 'light' ? 'light' : 'dark';
+    });
+  </script>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <!-- Development aid: shows a page of the app inside a phone-sized frame. -->
+  <div class="phone-bar">
+    <strong>Phone view</strong>
+    <label class="inline-label muted">Size
+      <select id="size">
+        <option value="390x844" selected>390 × 844 (iPhone 13 Pro, 14, 15)</option>
+        <option value="412x891">412 × 891 (Samsung Galaxy S25 Ultra)</option>
+        <option value="360x780">360 × 780 (small Android)</option>
+        <option value="412x915">412 × 915 (Pixel)</option>
+        <option value="430x932">430 × 932 (iPhone Pro Max)</option>
+      </select>
+    </label>
+    <button id="orientation" type="button" class="toggle-button" title="Click to rotate the phone">Portrait</button>
+    <a id="exit" class="button" href="../index.html">Exit phone view</a>
+  </div>
+  <iframe id="frame" class="phone-frame" title="App in a phone-sized frame"></iframe>
+  <script>
+    const page = new URLSearchParams(location.search).get('page') || 'index.html';
+    // Only pages of this app, never another site.
+    const safe = /^[\w.-]+\.html(\?.*)?$/.test(page) ? page : 'index.html';
+    document.getElementById('frame').src = '../' + safe;
+    document.getElementById('exit').href = '../' + safe;
+
+    const size = document.getElementById('size');
+    // Orientation: a toggle (Portrait <-> Landscape).
+    const orientation = document.getElementById('orientation');
+    let landscape = false;
+    const frame = document.getElementById('frame');
+    function applySize() {
+      let [w, h] = size.value.split('x').map(Number);
+      if (landscape) [w, h] = [h, w];
+      orientation.textContent = landscape ? '⟲ Landscape' : '⟲ Portrait';
+      frame.style.width = `${Math.min(w, window.innerWidth - 40) + 20}px`; // + frame border
+      frame.style.height = `${Math.min(h, window.innerHeight - 80) + 20}px`;
+      try {
+        localStorage.setItem('bs.phoneSize', size.value);
+        localStorage.setItem('bs.phoneOrientation', landscape ? 'landscape' : 'portrait');
+      } catch { /* ignore */ }
+    }
+    try {
+      const saved = localStorage.getItem('bs.phoneSize');
+      if (saved && [...size.options].some((o) => o.value === saved)) size.value = saved;
+      landscape = localStorage.getItem('bs.phoneOrientation') === 'landscape';
+    } catch { /* ignore */ }
+    size.addEventListener('change', applySize);
+    orientation.addEventListener('click', () => {
+      landscape = !landscape;
+      applySize();
+    });
+    window.addEventListener('resize', applySize);
+    applySize();
+  </script>
+</body>
+</html>

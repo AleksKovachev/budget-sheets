@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <!-- interactive-widget: the page gets smaller when the on-screen keyboard opens (instead of being covered). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Budget Sheets</title>
+  <script>
+    // Apply the saved theme before anything is drawn (dark by default).
+    try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
+  </script>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <h1>Budget Sheets</h1>
+      <div class="topbar-right">
+        <a id="btn-phone" class="button" href="dev/phone.html" data-icon="phone" hidden>Phone view</a>
+        <button id="btn-sync" type="button" class="sync-button" hidden></button>
+        <button id="btn-pin" type="button" class="icon-button" aria-label="Keep the top bar visible"></button>
+        <button id="btn-theme" type="button" class="icon-button" aria-label="Switch theme"></button>
+        <a id="btn-sheets" class="button icon-button" href="#" target="_blank" rel="noopener" title="Open in Google Sheets" aria-label="Open in Google Sheets" data-icon="external"></a>
+        <div id="user" class="user" hidden>
+          <span id="user-email"></span>
+          <button id="btn-signout" type="button" class="link">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <section id="view-message" class="card" hidden>
+      <p id="message-text"></p>
+    </section>
+
+    <section id="view-signin" class="card center" hidden>
+      <p>Sign in with a Google account that has access to the budget spreadsheet.</p>
+      <button id="btn-signin" type="button" class="primary">Sign in with Google</button>
+    </section>
+
+    <section id="view-pick" class="card" hidden>
+      <form id="form-pick">
+        <label for="sheet-url">Spreadsheet URL</label>
+        <div class="row">
+          <input id="sheet-url" type="text" inputmode="url" autocomplete="off"
+                 placeholder="https://docs.google.com/spreadsheets/d/…" required>
+          <button type="submit" class="primary">Open</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="view-sheet" hidden>
+      <div class="sheet-head">
+        <div>
+          <h2 id="sheet-title"></h2>
+          <small id="sheet-meta"></small>
+        </div>
+        <div class="sheet-actions">
+          <a id="btn-raw" class="button" href="raw.html" data-icon="table">Raw data</a>
+          <button id="btn-change" type="button" class="icon-button" title="Change spreadsheet" aria-label="Change spreadsheet" data-icon="swapSheet"></button>
+        </div>
+      </div>
+
+      <div class="view-bar">
+        <div class="period">
+          <button id="period-prev" type="button" class="icon-button" title="Previous period" aria-label="Previous period"></button>
+          <button id="period-btn" type="button" class="period-button" aria-haspopup="dialog"></button>
+          <button id="period-next" type="button" class="icon-button" title="Next period" aria-label="Next period"></button>
+          <div id="period-panel" class="period-panel" role="dialog" aria-label="Choose a period" hidden></div>
+        </div>
+        <button id="btn-order" type="button" class="toggle-button" aria-label="Order of the months"></button>
+      </div>
+      <div id="notice" class="notice" aria-live="polite"></div>
+
+      <div class="summary">
+        <div id="balance" class="balance"></div>
+        <div class="totals-wrap">
+          <table id="totals" class="totals"></table>
+          <div id="totals-note" class="totals-note" hidden></div>
+        </div>
+      </div>
+
+      <details id="problems" class="problems" hidden>
+        <summary id="problems-summary"></summary>
+        <ul id="problems-list"></ul>
+      </details>
+
+      <div id="months"></div>
+      <p id="empty" class="muted center" hidden>No entries in this period.</p>
+    </section>
+  </main>
+
+  <div id="popover" class="popover" role="tooltip" hidden></div>
+  <button id="btn-add" type="button" class="fab" title="Add record" aria-label="Add record" data-icon="plus" hidden></button>
+</body>
+</html>

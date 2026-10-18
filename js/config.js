@@ -1,0 +1,79 @@
+// OAuth client ID from Google Cloud (SETUP.md, step 3). Not a secret: it is visible in the page anyway.
+export const CLIENT_ID = '685009826048-l3cq1q0iukvd9ihm1lkpnc7ua3gav8an.apps.googleusercontent.com';
+
+export const SCOPES = [
+  'https://www.googleapis.com/auth/spreadsheets',
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+];
+
+// Spreadsheet opened when none has been chosen in this browser yet (new device, incognito).
+// Empty while developing against the test copy; set to the real spreadsheet's URL at release.
+// Only accounts the spreadsheet is shared with can open it, so the URL alone grants nothing.
+export const DEFAULT_SPREADSHEET_URL = '';
+
+// The two people, in the column order of the year tabs (SHEET_LAYOUT.md).
+// Emails are stored as SHA-256 hashes of the lower-case address, so the public page doesn't reveal them.
+export const PEOPLE = [
+  {
+    key: 'aleks',
+    name: 'Aleks',
+    emailSha256: 'b27c9243e46ad6a2056ea8dc806858e907867a97d6213908ba4050cd41f734cd',
+  },
+  {
+    key: 'iliyana',
+    name: 'Iliyana',
+    emailSha256: 'da79eb71e53a45f0bf94fbb6f2433fe36aa9c0b156143dd1e78e942a966caa11',
+  },
+];
+
+// Category colours (same as the conditional formatting in the sheet) and icons (js/icons.js).
+// Keys are compared ignoring case, emoji and extra spaces. A category missing here gets a grey tag icon.
+// `image` (optional): a picture with its own colours used instead of the icon (an exception to the
+// one-colour rule); `icon` stays as the fallback.
+export const CATEGORIES = {
+  'wedding': { color: '#8e7cc3', icon: 'rings' },
+  'groceries': { color: '#b7e1cd', icon: 'bag' },
+  'restaurants/fast food': { color: '#fff2cc', icon: 'utensils' },
+  'car': { color: '#f4cccc', icon: 'car' },
+  'travel': { color: '#fce5cd', icon: 'suitcase' },
+  'rent': { color: '#e6b8af', icon: 'key' },
+  'bills': { color: '#ead1dc', icon: 'receipt' },
+  'fashion': { color: '#d9d2e9', icon: 'shirt' },
+  'health and beauty': { color: '#d0e0e3', icon: 'heart' },
+  'home': { color: '#efefef', icon: 'house' },
+  'electronics': { color: '#d1fdbd', icon: 'laptop' },
+  'pharmacy': { color: '#c9daf8', icon: 'pill' },
+  // Our Cavalier King Charles Spaniel, drawn by Aleks (assets/icons/cavalier.svg, 5 colours).
+  'dog': { color: '#e4d1a5', icon: 'paw', image: new URL('../assets/icons/cavalier.svg', import.meta.url).href },
+  'gifts': { color: '#ccfffd', icon: 'gift' },
+  'others': { color: '#ffdaff', icon: 'dots' },
+};
+
+export function categoryStyle(name) {
+  const key = String(name || '').toLowerCase().replace(/[^\p{L}\p{N}/ ]/gu, '').replace(/\s+/g, ' ').trim();
+  const style = CATEGORIES[key];
+  return style ? { ...style, ...badgeColours(style.color) } : null;
+}
+
+// Badge colours from a category colour: a lighter tint for the circle and a darker, more saturated shade
+// of the same hue for the icon (greys stay grey).
+export function badgeColours(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h = Math.round((h * 60 + 360) % 360);
+  const tint = (v) => Math.round((v + (1 - v) * 0.4) * 255);
+  const badge = `rgb(${tint(r)} ${tint(g)} ${tint(b)})`;
+  const ink = s < 0.08 ? 'hsl(0 0% 30%)' : `hsl(${h} ${Math.round(Math.min(85, Math.max(50, s * 100)))}% 30%)`;
+  return { badge, ink };
+}
+
+// Bulgaria switched from lev to euro on 1 January 2026. Tabs before that year are in BGN.
+export const EURO_FROM_YEAR = 2026;
+export const BGN_PER_EUR = 1.95583;

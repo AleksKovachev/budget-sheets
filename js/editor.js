@@ -1,0 +1,573 @@
+// Editing on the main page: change an entry's date, category, description or amounts; insert an empty
+// entry between two rows; add a record through a dialog; create a missing year tab.
+//
+// Every write first checks that the row in Google Sheets is still what the page shows, so a change made
+// meanwhile (by the other person, or directly in Sheets) is never overwritten. Rows go where the sheet's
+// rules put them (budget.js: placeEntry / rowsToDelete): sorted by date, one blank row between months.
+
+import { quoteTab } from './sheets.js';
+import { parseYearTab, placeEntry, rowsToDelete, staysInPlace, moneyColumn } from './budget.js';
+import { cannotCreate, confirmCreate, createYearTab } from './yeartabs.js';
+import { isoToSerial, isoToBg, bgToIso } from './dates.js';
+import { el, columnLetter, placeFloating, openDialog, dialogButton, confirmDialog } from './ui.js';
+import { icon, categoryIcon } from './icons.js';
+import { openDatePopup, closeDatePopup, todayIso } from './calendar.js';
+import { PEOPLE, categoryStyle } from './config.js';
+
+const INPUT_COLUMNS = 9; // A..I
+const DATE_COLUMN = 0;
+const CATEGORY_COLUMN = 1;
+const DESCRIPTION_COLUMN = 2;
+const MONEY_FIELDS = [['paid', 'Paid'], ['personal', 'Personal'], ['cashIn', 'Cash in']];
+
+// ctx (from app.js): api, spreadsheetId(), meta(), reloadMeta(), yearTitles() (newest first),
+// cached(title) -> { parsed, values }, refresh(titles), me(), categories(), busy(on), showError(err), notice(text)
+export function createEditor(ctx) {
+  const id = () => ctx.spreadsheetId();
+  const sheetIdOf = (title) => ctx.meta().sheets.find((s) => s.properties.title === title)?.properties.sheetId;
+  const cellRange = (title, row, column) => `${quoteTab(title)}!${columnLetter(column)}${row}`;
+
+  // ---- Reading and writing rows ----
+
+  async function freshValues(title) {
+    const result = await ctx.api.batchGetValues(id(), [quoteTab(title)], 'UNFORMATTED_VALUE');
+    return result.valueRanges[0].values || [];
+  }
+
+  function rowCells(values, rowNumber) {
+    return Array.from({ length: INPUT_COLUMNS }, (_, c) => values[rowNumber - 1]?.[c] ?? '');
+  }
+
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  // Throws (and refreshes the page) if the row changed in Sheets since the page showed it.
+  async function checkUnchanged(title, rowNumber) {
+    const fresh = await freshValues(title);
+    if (!same(rowCells(ctx.cached(title).values, rowNumber), rowCells(fresh, rowNumber))) {
+      await ctx.refresh([title]);
+      throw new Error('This entry was changed in Google Sheets in the meantime. Nothing was saved; the page now shows the new values.');
+    }
+    return fresh;
+  }
+
+  // cells: [[column, value]]; null or '' empties the cell. Values are written exactly (RAW).
+  async function writeCells(title, rowNumber, cells) {
+    const writes = [];
+    const clears = [];
+    for (const [column, value] of cells) {
+      const range = cellRange(title, rowNumber, column);
+      if (value === null || value === '') clears.push(range);
+      else writes.push({ range, values: [[value]] });
+    }
+    if (writes.length) await ctx.api.batchUpdateValues(id(), writes, 'RAW');
+    if (clears.length) await ctx.api.batchClearValues(id(), clears);
+  }
+
+  // Inserts empty rows at a 1-based row, taking the formatting of the entry row next to it.
+  async function insertRowsAt(title, parsed, row, count) {
+    const above = parsed.rows.find((r) => r.rowNumber === row - 1);
+    await ctx.api.insertRows(id(), sheetIdOf(title), row - 1, count, above?.kind === 'entry');
+  }
+
+  // Adds an entry (A..I values, date in A) where it belongs; returns the placement.
+  async function addRow(title, iso, values) {
+    const parsed = parseYearTab(title, await freshValues(title));
+    const place = placeEntry(parsed, iso);
+    if (place.insert) await insertRowsAt(title, parsed, place.row, place.insert);
+    await writeCells(title, place.row, values.map((v, c) => [c, v]).filter(([, v]) => v !== '' && v !== null));
+    return place;
+  }
+
+  // Runs a change with syncing paused and the page dimmed, then shows the result; errors are shown on the page.
+  async function change(titles, action) {
+    ctx.busy(true);
+    try {
+      await ctx.withLoading(async () => {
+        await action();
+        await ctx.refresh(titles);
+      });
+    } catch (err) {
+      ctx.showError(err);
+      console.error(err);
+    } finally {
+      ctx.busy(false);
+    }
+  }
+
+  // ---- Year tabs ----
+
+  // Makes sure a tab exists for the year; asks before creating one. Resolves false if cancelled.
+  // The tab list is read again first: tabs may have been added or deleted in Google Sheets.
+  async function ensureYearTab(yearText) {
+    await ctx.reloadMeta();
+    const years = ctx.yearTitles();
+    if (years.includes(yearText)) return true;
+    const problem = cannotCreate(yearText, years);
+    if (problem) throw new Error(`There is no ${yearText} tab. ${problem}`);
+    if (!(await confirmCreate(yearText, years[0]))) return false;
+    const source = ctx.meta().sheets.find((s) => s.properties.title === years[0]).properties;
+    await createYearTab({
+      api: ctx.api,
+      spreadsheetId: id(),
+      yearText,
+      source,
+      sourceHeader: (await freshValues(years[0]))[0],
+    });
+    await ctx.reloadMeta();
+    ctx.notice(`Created the ${yearText} tab in Google Sheets.`);
+    return true;
+  }
+
+  // ---- Editing an entry ----
+
+  async function setDate(year, entry, iso) {
+    const title = year.title;
+    const target = iso.slice(0, 4);
+    await change([title, target], async () => {
+      const fresh = await checkUnchanged(title, entry.rowNumber);
+      if (target === title && staysInPlace(year, entry, iso)) {
+        await writeCells(title, entry.rowNumber, [[DATE_COLUMN, isoToSerial(iso)]]);
+        return;
+      }
+      if (!(await ensureYearTab(target))) return;
+      const extra = (fresh[entry.rowNumber - 1] || []).slice(INPUT_COLUMNS).some((v) => v !== '' && v !== null);
+      if (extra && !(await confirmDialog({
+        title: 'Move this entry?',
+        message: `Row ${entry.rowNumber} also has something to the right of the entry (after column I). The new date moves the entry to another row; that extra content is removed with the old row.`,
+        confirm: 'Move it',
+      }))) return;
+
+      // Add at the new place first, then remove the old row: if anything fails, nothing is lost.
+      const values = rowCells(fresh, entry.rowNumber);
+      values[DATE_COLUMN] = isoToSerial(iso);
+      const placed = await addRow(target, iso, values);
+      let oldRow = entry.rowNumber;
+      if (target === title && placed.insert && placed.row <= oldRow) oldRow += placed.insert;
+      const after = await freshValues(title);
+      if (!same(rowCells(after, oldRow), rowCells(fresh, entry.rowNumber))) {
+        throw new Error(`The entry was added on ${isoToBg(iso)}, but its old row changed meanwhile, so it wasn't removed. Please check row ${oldRow} of ${title}.`);
+      }
+      const removal = rowsToDelete(parseYearTab(title, after), oldRow);
+      await ctx.api.deleteRows(id(), sheetIdOf(title), removal.start - 1, removal.count);
+    });
+  }
+
+  // Deletes an entry's row (and its month's blank row if the month becomes empty), after asking.
+  async function deleteEntry(year, entry) {
+    const amounts = PEOPLE.flatMap((p) => MONEY_FIELDS
+      .filter(([f]) => entry.money[p.key][f])
+      .map(([f, label]) => `${p.name} ${label.toLowerCase()} ${entry.money[p.key][f]}`));
+    const what = [entry.date ? isoToBg(entry.date) : null, entry.category, entry.description, amounts.join(', ')].filter(Boolean).join(' · ');
+    if (!(await confirmDialog({ title: 'Delete this entry?', message: [what || '(empty entry)', 'Its row is removed from Google Sheets.'], confirm: 'Delete' }))) return;
+    await change([year.title], async () => {
+      const fresh = await checkUnchanged(year.title, entry.rowNumber);
+      const extra = (fresh[entry.rowNumber - 1] || []).slice(INPUT_COLUMNS).some((v) => v !== '' && v !== null);
+      if (extra && !(await confirmDialog({
+        title: 'Delete the whole row?',
+        message: `Row ${entry.rowNumber} also has something to the right of the entry (after column I); it is deleted with the row.`,
+        confirm: 'Delete',
+      }))) return;
+      const removal = rowsToDelete(parseYearTab(year.title, fresh), entry.rowNumber);
+      await ctx.api.deleteRows(id(), sheetIdOf(year.title), removal.start - 1, removal.count);
+    });
+  }
+
+  // Entry menu (right-click, or press and hold on a phone).
+  function openEntryMenu(anchor, year, entry) {
+    if (entry.kind === 'carry') return;
+    const menu = el('div', 'menu');
+    menu.setAttribute('role', 'menu');
+    menu.append(el('div', 'menu-title', [entry.date ? isoToBg(entry.date) : '', entry.description || entry.category].filter(Boolean).join(' · ')));
+    const remove = el('button', 'menu-item danger');
+    remove.type = 'button';
+    remove.append(icon('trash'), el('span', null, 'Delete entry'));
+    remove.addEventListener('click', () => {
+      closePopup();
+      deleteEntry(year, entry);
+    });
+    menu.append(remove);
+    showPopup(menu, anchor);
+    remove.focus();
+  }
+
+  async function setCells(year, entry, cells) {
+    await change([year.title], async () => {
+      await checkUnchanged(year.title, entry.rowNumber);
+      await writeCells(year.title, entry.rowNumber, cells);
+    });
+  }
+
+  // Inserts an empty entry (dated like its neighbour) before the 1-based row `row`.
+  async function insertEmpty(year, row, iso) {
+    await change([year.title], async () => {
+      const fresh = await freshValues(year.title);
+      const shown = ctx.cached(year.title).values;
+      // The rows on both sides must still be where the page shows them.
+      if (!same(rowCells(shown, row - 1), rowCells(fresh, row - 1)) || !same(rowCells(shown, row), rowCells(fresh, row))) {
+        await ctx.refresh([year.title]);
+        throw new Error('The sheet changed in the meantime. Nothing was inserted; the page now shows the new rows.');
+      }
+      const parsed = parseYearTab(year.title, fresh);
+      await insertRowsAt(year.title, parsed, row, 1);
+      await writeCells(year.title, row, [[DATE_COLUMN, isoToSerial(iso)]]);
+    });
+  }
+
+  // ---- Popups for editing ----
+
+  let popup = null;
+  function closePopup() {
+    popup?.node.remove();
+    popup?.anchor.classList.remove('is-open');
+    popup = null;
+  }
+  function showPopup(node, anchor) {
+    closePopup();
+    closeDatePopup();
+    node.addEventListener('pointerdown', (event) => event.stopPropagation());
+    node.addEventListener('click', (event) => event.stopPropagation());
+    placeFloating(node, anchor);
+    anchor.classList.add('is-open');
+    popup = { node, anchor };
+  }
+  document.addEventListener('pointerdown', () => closePopup());
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && popup) {
+      event.stopPropagation();
+      closePopup();
+    }
+  });
+
+  // Category list with each category's badge and name; onPick(name).
+  function openCategoryPicker(anchor, current, onPick) {
+    const list = el('div', 'choice-list');
+    list.setAttribute('role', 'listbox');
+    list.tabIndex = -1;
+    const options = ctx.categories();
+    const wanted = String(current || '').trim().toLowerCase();
+    for (const option of options) {
+      const item = el('div', 'choice');
+      item.setAttribute('role', 'option');
+      item.append(categoryBadge(option, 'small'), el('span', null, option));
+      if (option.trim().toLowerCase() === wanted) item.classList.add('selected');
+      item.addEventListener('click', () => {
+        closePopup();
+        onPick(option);
+      });
+      list.append(item);
+    }
+    list.addEventListener('keydown', (event) => {
+      const items = [...list.children];
+      let index = items.findIndex((i) => i.classList.contains('active'));
+      if (index < 0) index = items.findIndex((i) => i.classList.contains('selected'));
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        index = Math.min(items.length - 1, Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)));
+        items.forEach((i, n) => i.classList.toggle('active', n === index));
+        items[index].scrollIntoView({ block: 'nearest' });
+      } else if (event.key === 'Enter' && index >= 0) {
+        event.preventDefault();
+        items[index].click();
+      }
+    });
+    // As wide as the names need; in the Add record dialog at least as wide as its field.
+    if (anchor.classList.contains('category-button')) list.style.minWidth = `${anchor.offsetWidth}px`;
+    showPopup(list, anchor);
+    list.querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
+    list.focus();
+  }
+
+  // Amounts of one person at a time (tabs to switch person); saves all changed fields.
+  function openAmounts(anchor, entry, startPerson, onSave) {
+    const panel = el('div', 'amount-popup');
+    let person = startPerson;
+    const values = Object.fromEntries(PEOPLE.map((p) => [p.key, Object.fromEntries(MONEY_FIELDS.map(([f]) => [f, entry.money[p.key][f] ? String(entry.money[p.key][f]) : '']))]));
+    const tabs = personTabs(person, (key) => { saveFields(); person = key; drawFields(); });
+    const fields = el('div', 'amount-fields');
+    const error = el('div', 'form-error');
+    let inputs = {};
+    const saveFields = () => {
+      for (const [f] of MONEY_FIELDS) values[person][f] = inputs[f].value;
+    };
+    const drawFields = () => {
+      fields.replaceChildren();
+      inputs = {};
+      for (const [f, label] of MONEY_FIELDS) {
+        const input = amountInput(values[person][f]);
+        inputs[f] = input;
+        input.addEventListener('keydown', (event) => { if (event.key === 'Enter') save(); });
+        const wrap = el('label', `field person-${person}`);
+        wrap.append(el('span', null, label), input);
+        fields.append(wrap);
+      }
+      inputs.paid.focus();
+    };
+    const save = () => {
+      saveFields();
+      const cells = [];
+      for (const p of PEOPLE) {
+        for (const [f] of MONEY_FIELDS) {
+          const amount = parseAmount(values[p.key][f]);
+          if (Number.isNaN(amount)) {
+            error.textContent = `${p.name}: "${values[p.key][f]}" is not an amount.`;
+            return;
+          }
+          const before = entry.money[p.key][f] || null;
+          if ((amount || null) !== before) cells.push([moneyColumn(PEOPLE.indexOf(p), f), amount]);
+        }
+      }
+      closePopup();
+      if (cells.length) onSave(cells);
+    };
+    const buttons = el('div', 'popup-buttons');
+    buttons.append(dialogButton('Cancel', null, closePopup), dialogButton('Save', 'primary', save));
+    panel.append(tabs.node, fields, error, buttons);
+    drawFields(); // Before placing, so the popup's full height is known.
+    showPopup(panel, anchor);
+    inputs.paid.focus();
+  }
+
+  function editDescription(descLine, year, entry) {
+    const original = entry.description;
+    const input = el('input', 'inline-input');
+    input.value = original;
+    input.setAttribute('aria-label', 'Description');
+    const span = descLine.querySelector('.desc');
+    descLine.classList.add('editing');
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const text = input.value;
+      input.replaceWith(span);
+      descLine.classList.remove('editing');
+      if (save && text.trim() !== original) setCells(year, entry, [[DESCRIPTION_COLUMN, text.trim() || null]]);
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); finish(true); }
+      if (event.key === 'Escape') { event.stopPropagation(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
+
+  // Click on a part of an entry row: which part decides what is edited.
+  function editEntry(target, year, entry) {
+    if (entry.kind === 'carry') {
+      ctx.notice('The carry-over row is calculated by the sheet from last year\'s balance; it can\'t be edited.');
+      return;
+    }
+    const dateCell = target.closest('.date');
+    if (dateCell) {
+      openDatePopup({
+        anchor: dateCell,
+        value: entry.date,
+        typed: true,
+        onPick: (iso) => { if (iso !== entry.date) setDate(year, entry, iso); },
+      });
+      return;
+    }
+    const categoryPart = target.closest('.cat-badge, .cat');
+    if (categoryPart) {
+      openCategoryPicker(categoryPart, entry.category, (name) => {
+        if (name !== entry.category) setCells(year, entry, [[CATEGORY_COLUMN, name]]);
+      });
+      return;
+    }
+    const desc = target.closest('.desc');
+    if (desc) {
+      editDescription(desc.closest('.desc-line'), year, entry);
+      return;
+    }
+    const who = target.closest('.who');
+    const amounts = target.closest('.amounts');
+    if (who || amounts) {
+      const person = who?.dataset.person || amounts.querySelector('.who:not(:empty)')?.dataset.person || ctx.me()?.key || PEOPLE[0].key;
+      openAmounts(who || amounts, entry, person, (cells) => setCells(year, entry, cells));
+    }
+  }
+
+  // ---- Add record dialog ----
+
+  function openAddDialog() {
+    const me = ctx.me() || PEOPLE[0];
+    let person = me.key;
+    let category = '';
+    const { body, foot, close } = openDialog({ title: 'Add record', className: 'add-dialog', onClose: () => { closePopup(); closeDatePopup(); } });
+
+    // Date: text (dd.mm.yyyy and short forms) + calendar.
+    const dateInput = el('input');
+    dateInput.value = isoToBg(todayIso());
+    dateInput.placeholder = 'dd.mm.yyyy';
+    dateInput.inputMode = 'numeric';
+    const calendarButton = el('button', 'icon-button field-icon');
+    calendarButton.type = 'button';
+    calendarButton.title = 'Pick a date';
+    calendarButton.append(icon('calendar'));
+    calendarButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openDatePopup({ anchor: dateInput, value: bgToIso(dateInput.value), onPick: (iso) => { dateInput.value = isoToBg(iso); dateInput.focus(); } });
+    });
+    const dateRow = el('div', 'input-with-icon');
+    dateRow.append(dateInput, calendarButton);
+
+    // Category: button that opens the list with icons.
+    const categoryButton = el('button', 'category-button');
+    categoryButton.type = 'button';
+    const drawCategory = () => {
+      categoryButton.replaceChildren(
+        ...(category ? [categoryBadge(category, 'small'), el('span', null, category)] : [el('span', 'muted', 'Choose a category')]),
+        el('span', 'caret', '▾'),
+      );
+    };
+    drawCategory();
+    categoryButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openCategoryPicker(categoryButton, category, (name) => { category = name; drawCategory(); description.focus(); });
+    });
+
+    const description = el('input');
+    description.placeholder = 'e.g. Lidl, rent, dog food…';
+
+    // Who paid, and the three amounts.
+    const amountInputs = {};
+    const amountFields = el('div', 'amount-fields');
+    for (const [f, label] of MONEY_FIELDS) {
+      amountInputs[f] = amountInput('');
+      const wrap = el('label', 'field');
+      wrap.append(el('span', null, label), amountInputs[f]);
+      amountFields.append(wrap);
+    }
+    const colourAmounts = () => amountFields.querySelectorAll('.field').forEach((f) => { f.className = `field person-${person}`; });
+    const tabs = personTabs(person, (key) => { person = key; colourAmounts(); });
+    colourAmounts();
+
+    const error = el('div', 'form-error');
+    error.setAttribute('role', 'alert');
+    body.append(
+      formField('Date', dateRow),
+      formField('Category', categoryButton),
+      formField('Description', description),
+      formField('Who', tabs.node),
+      amountFields,
+      el('p', 'muted form-hint', 'Paid: shared 50/50 · Personal: the part of "Paid" that was only for this person · Cash in: money given to the other person.'),
+      error,
+    );
+
+    const add = dialogButton('Add record', 'primary', async () => {
+      const iso = bgToIso(dateInput.value);
+      if (!iso) return fail('Enter the date as day, month, year, e.g. 18.10.2026 or 18.10.26.');
+      if (!category) return fail('Choose a category.');
+      const money = {};
+      for (const [f] of MONEY_FIELDS) {
+        money[f] = parseAmount(amountInputs[f].value);
+        if (Number.isNaN(money[f])) return fail(`"${amountInputs[f].value}" is not an amount.`);
+      }
+      if (!money.paid && !money.cashIn) return fail('Enter an amount in "Paid" or "Cash in".');
+      if (money.personal && money.personal > (money.paid || 0)) return fail('"Personal" is part of "Paid", so it can\'t be larger.');
+
+      const values = Array(INPUT_COLUMNS).fill('');
+      values[DATE_COLUMN] = isoToSerial(iso);
+      values[CATEGORY_COLUMN] = category;
+      values[DESCRIPTION_COLUMN] = description.value.trim();
+      const p = PEOPLE.findIndex((x) => x.key === person);
+      for (const [f] of MONEY_FIELDS) if (money[f]) values[moneyColumn(p, f)] = money[f];
+
+      add.disabled = true;
+      add.textContent = 'Adding…';
+      ctx.busy(true);
+      try {
+        const title = iso.slice(0, 4);
+        if (!(await ensureYearTab(title))) return;
+        await addRow(title, iso, values);
+        await ctx.refresh([title]);
+        close('added');
+        ctx.notice(`Added: ${isoToBg(iso)} · ${category}${values[DESCRIPTION_COLUMN] ? ` · ${values[DESCRIPTION_COLUMN]}` : ''}`);
+      } catch (err) {
+        console.error(err);
+        fail(err.message || String(err));
+      } finally {
+        ctx.busy(false);
+        add.disabled = false;
+        add.textContent = 'Add record';
+      }
+    });
+    foot.append(dialogButton('Cancel', null, () => close('cancel')), add);
+    body.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
+        event.preventDefault();
+        add.click();
+      }
+    });
+    function fail(message) {
+      error.textContent = message;
+      return null;
+    }
+    dateInput.focus();
+  }
+
+  return { editEntry, insertEmpty, openAddDialog, openEntryMenu, closePopup };
+}
+
+// ---- Small builders ----
+
+function formField(label, control) {
+  const wrap = el('div', 'form-field');
+  wrap.append(el('span', 'form-label', label), control);
+  return wrap;
+}
+
+function amountInput(value) {
+  const input = el('input', 'amount-input');
+  input.value = value;
+  input.inputMode = 'decimal';
+  input.placeholder = '0.00';
+  input.autocomplete = 'off';
+  return input;
+}
+
+// '' -> null; '12,50' / '12.50' -> 12.5; anything else -> NaN.
+function parseAmount(text) {
+  const t = String(text).trim().replace(/\s/g, '').replace(',', '.');
+  if (t === '') return null;
+  if (!/^-?\d+(\.\d+)?$/.test(t)) return NaN;
+  return Number(t);
+}
+
+// Person switch (Aleks | Iliyana) in each person's colour.
+function personTabs(selected, onChange) {
+  const node = el('div', 'seg person-seg');
+  node.setAttribute('role', 'tablist');
+  for (const person of PEOPLE) {
+    const tab = el('button', `seg-item person-${person.key}`, person.name);
+    tab.type = 'button';
+    tab.setAttribute('role', 'tab');
+    tab.dataset.person = person.key;
+    const select = () => {
+      for (const t of node.children) {
+        const on = t.dataset.person === person.key;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', String(on));
+      }
+      onChange(person.key);
+    };
+    tab.addEventListener('click', select);
+    if (person.key === selected) tab.classList.add('active');
+    tab.setAttribute('aria-selected', String(person.key === selected));
+    node.append(tab);
+  }
+  return { node };
+}
+
+function categoryBadge(name, size = '') {
+  const style = categoryStyle(name);
+  const badge = el('span', `cat-badge ${size}`.trim());
+  if (style) {
+    badge.style.setProperty('--cat', style.badge);
+    badge.style.setProperty('--cat-ink', style.ink);
+  }
+  badge.append(categoryIcon(style));
+  return badge;
+}

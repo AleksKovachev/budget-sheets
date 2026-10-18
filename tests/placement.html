@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Placement test</title>
+  <style>
+    body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; }
+    .ok { color: #137333; } .fail { color: #c5221f; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Where new entries go (placeEntry, rowsToDelete, staysInPlace)</h1>
+  <div id="out"></div>
+  <script type="module">
+    import { parseYearTab, placeEntry, rowsToDelete, staysInPlace } from '../js/budget.js';
+
+    // A small made-up year tab: headers (rows 1-3), carry-over (row 4), February (5-6), blank (7), April (8-9).
+    const header = ['Date', 'Catgory', 'Aditional information', 'Paid by Aleks', 'Personal Aleks', 'Aleks cash in',
+      'Paid by Iliyana', 'Personal Iliyana', 'Iliyana cash in', '', '', 'Total price', 'Half price', 'Cash in total', 'Owns the other'];
+    const serial = (iso) => Math.round((Date.UTC(...iso.split('-').map((n, i) => Number(n) - (i === 1 ? 1 : 0))) - Date.UTC(1899, 11, 30)) / 86400000);
+    const entry = (iso, what) => [serial(iso), 'Groceries', what, 10];
+    const values = [
+      header, [], [],
+      ['', '', 'From 2026', '', '', 5],
+      entry('2027-02-03', 'Feb a'), entry('2027-02-20', 'Feb b'),
+      [],
+      entry('2027-04-01', 'Apr a'), entry('2027-04-15', 'Apr b'),
+    ];
+    const year = parseYearTab('2027', values);
+
+    const cases = [
+      ['middle of February', placeEntry(year, '2027-02-10'), { row: 6, insert: 1 }],
+      ['same day as Feb b goes after it', placeEntry(year, '2027-02-20'), { row: 7, insert: 1 }],
+      ['before first of February', placeEntry(year, '2027-02-01'), { row: 5, insert: 1 }],
+      ['January (before all months)', placeEntry(year, '2027-01-10'), { row: 5, insert: 2 }],
+      ['March (between months)', placeEntry(year, '2027-03-05'), { row: 8, insert: 2 }],
+      ['end of April (newest)', placeEntry(year, '2027-04-20'), { row: 10, insert: 0 }],
+      ['May (new month after all)', placeEntry(year, '2027-05-02'), { row: 11, insert: 0 }],
+      ['empty tab: first entry below the carry-over', placeEntry(parseYearTab('2027', values.slice(0, 4)), '2027-01-02'), { row: 5, insert: 0 }],
+      ['delete Feb a (month keeps Feb b)', rowsToDelete(year, 5), { start: 5, count: 1 }],
+      ['delete only entry of a month + blank after', rowsToDelete(parseYearTab('2027', [...values.slice(0, 4), entry('2027-02-03', 'x'), [], entry('2027-04-01', 'y')]), 5), { start: 5, count: 2 }],
+      ['delete only entry of the last month + blank before', rowsToDelete(parseYearTab('2027', [...values.slice(0, 4), entry('2027-02-03', 'x'), [], entry('2027-04-01', 'y')]), 7), { start: 6, count: 2 }],
+      ['Feb b to 25.02 stays', staysInPlace(year, year.entries[1], '2027-02-25'), true],
+      ['Feb a to 25.02 moves', staysInPlace(year, year.entries[0], '2027-02-25'), false],
+      ['Feb a to March moves', staysInPlace(year, year.entries[0], '2027-03-01'), false],
+    ];
+    let failed = 0;
+    for (const [name, got, want] of cases) {
+      const ok = JSON.stringify(got) === JSON.stringify(want);
+      if (!ok) failed++;
+      const p = document.createElement('p');
+      p.className = ok ? 'ok' : 'fail';
+      p.textContent = `${ok ? '✓' : '✗'} ${name}: ${JSON.stringify(got)}${ok ? '' : ` (expected ${JSON.stringify(want)})`}`;
+      document.getElementById('out').append(p);
+    }
+    const summary = document.createElement('p');
+    summary.className = failed ? 'fail' : 'ok';
+    summary.textContent = failed ? `${failed} failed` : 'All passed';
+    document.getElementById('out').append(summary);
+  </script>
+</body>
+</html>

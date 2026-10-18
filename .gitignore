@@ -1,0 +1,9 @@
+# Real budget data (spreadsheet exports) never goes into git.
+private/
+*.xlsx
+*.csv
+
+__pycache__/
+
+# Local tool settings (Claude's preview server).
+.claude/

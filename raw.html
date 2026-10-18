@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <!-- interactive-widget: the page gets smaller when the on-screen keyboard opens (instead of being covered). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Raw data – Budget Sheets</title>
+  <script>
+    // Apply the saved theme before anything is drawn (dark by default).
+    try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
+  </script>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script type="module" src="js/raw.js"></script>
+</head>
+<body class="full-width">
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <h1><a id="home" href="index.html">Budget Sheets</a></h1>
+      <div class="topbar-right">
+        <a id="btn-phone" class="button" href="dev/phone.html" data-icon="phone" hidden>Phone view</a>
+        <button id="btn-sync" type="button" class="sync-button" hidden></button>
+        <button id="btn-pin" type="button" class="icon-button" aria-label="Keep the top bar visible"></button>
+        <button id="btn-theme" type="button" class="icon-button" aria-label="Switch theme"></button>
+        <a id="btn-sheets" class="button icon-button" href="#" target="_blank" rel="noopener" title="Open in Google Sheets" aria-label="Open in Google Sheets" data-icon="external"></a>
+        <a id="back" class="button" href="index.html">← Back to budget</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <section id="view-message" class="card" hidden>
+      <p id="message-text"></p>
+    </section>
+
+    <section id="view-signin" class="card center" hidden>
+      <p>Sign in with a Google account that has access to the budget spreadsheet.</p>
+      <button id="btn-signin" type="button" class="primary">Sign in with Google</button>
+    </section>
+
+    <section id="view-raw" hidden>
+      <div class="sheet-head">
+        <div>
+          <h2 id="sheet-title">Raw data</h2>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="inline-label muted"><span class="label-text">Year</span>
+          <select id="tab-select"></select>
+        </label>
+        <label class="inline-label muted"><span class="label-text">Show</span>
+          <select id="render">
+            <option value="FORMATTED_VALUE">As displayed</option>
+            <option value="FORMULA">Formulas</option>
+          </select>
+        </label>
+        <button id="btn-focus" type="button" class="focus-button"></button>
+        <span id="hint" class="muted">Click a cell to edit it, a row number to insert or delete rows. Enter saves, Esc cancels. Locked: header rows and formulas.</span>
+        <span id="status" class="muted"></span>
+      </div>
+      <div class="grid-wrap">
+        <table id="grid"></table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

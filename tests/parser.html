@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parser test</title>
+  <style>
+    body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }
+    .ok { color: #137333; } .fail { color: #c5221f; font-weight: 600; }
+    pre { background: #f3f3f3; padding: 8px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Parser test against private/fixture.json</h1>
+  <p>Generate the fixture first: <code>python tools/xlsx_to_fixture.py "private/&lt;export&gt;.xlsx"</code></p>
+  <div id="out">Running…</div>
+  <script type="module" src="parser-test.js"></script>
+</body>
+</html>

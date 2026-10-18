@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Icons – Budget Sheets</title>
+  <script>
+    try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
+  </script>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+    .icon-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 8px 8px; text-align: center; }
+    .icon-card .sizes { display: flex; align-items: flex-end; justify-content: center; gap: 10px; min-height: 64px; }
+    .icon-card .s16 { width: 16px; height: 16px; }
+    .icon-card .s24 { width: 24px; height: 24px; }
+    .icon-card .s56 { width: 56px; height: 56px; }
+    .icon-card code { display: block; margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .badge-card { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+    h2 { font-size: 16px; margin: 20px 0 10px; }
+    .draft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+    .draft-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+    .draft-card .row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+    .draft-card .s16 { width: 16px; height: 16px; }
+    .draft-card .s24 { width: 24px; height: 24px; }
+    .draft-card .s56 { width: 56px; height: 56px; }
+    .draft-card svg, .draft-card img { display: block; }
+    .cat-badge.large { width: 64px; height: 64px; }
+    .cat-badge.large > * { width: 52px; height: 52px; }
+    .cat-badge > img { width: 26px; height: 26px; }
+    .cat-badge.small > img { width: 20px; height: 20px; }
+    .draft-card code { font-size: 12px; color: var(--muted); }
+    .draft-note { font-size: 13px; color: var(--muted); margin: -4px 0 10px; }
+  </style>
+</head>
+<body>
+  <!-- Development aid: every icon of the app (16, 24 and 56 px) and every category badge, for review. -->
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <h1>Icons</h1>
+      <div class="topbar-right">
+        <button id="btn-theme" type="button" class="icon-button" aria-label="Switch theme"></button>
+        <a class="button" href="../index.html">← Back to the app</a>
+      </div>
+    </div>
+  </header>
+  <main class="wrap">
+    <h2>Site icon (favicon.svg)</h2>
+    <div class="icon-grid">
+      <div class="icon-card">
+        <div class="sizes">
+          <img src="../favicon.svg" width="16" height="16" alt="">
+          <img src="../favicon.svg" width="32" height="32" alt="">
+          <img src="../favicon.svg" width="56" height="56" alt="">
+        </div>
+        <code>favicon</code>
+      </div>
+    </div>
+    <h2>All icons</h2>
+    <div id="icons" class="icon-grid"></div>
+    <h2>Category badges</h2>
+    <div id="badges" class="badge-grid"></div>
+    <h2>Cavalier drafts (from private/)</h2>
+    <p class="draft-note">Read from the files in private/ (only while developing locally). Icons 1 and 2 take the
+      theme / badge colour like the other icons; icon 3 keeps its own five colours. Badges use the Dog colours.</p>
+    <div id="drafts" class="draft-grid"></div>
+  </main>
+  <script type="module">
+    import { icon, ICON_NAMES, categoryIcon } from '../js/icons.js';
+    import { CATEGORIES, badgeColours, categoryStyle } from '../js/config.js';
+    import { setUpPage } from '../js/ui.js';
+
+    setUpPage();
+    for (const name of ICON_NAMES) {
+      const card = document.createElement('div');
+      card.className = 'icon-card';
+      const sizes = document.createElement('div');
+      sizes.className = 'sizes';
+      sizes.append(icon(name, 'icon s16'), icon(name, 'icon s24'), icon(name, 'icon s56'));
+      const label = document.createElement('code');
+      label.textContent = name;
+      card.append(sizes, label);
+      document.getElementById('icons').append(card);
+    }
+    for (const [name, style] of Object.entries(CATEGORIES)) {
+      const card = document.createElement('div');
+      card.className = 'badge-card';
+      const badge = document.createElement('span');
+      badge.className = 'cat-badge';
+      const colours = badgeColours(style.color);
+      badge.style.setProperty('--cat', colours.badge);
+      badge.style.setProperty('--cat-ink', colours.ink);
+      badge.append(categoryIcon(categoryStyle(name)));
+      const label = document.createElement('span');
+      label.textContent = `${name} (${style.image ? style.image.split('/').pop() : style.icon})`;
+      card.append(badge, label);
+      document.getElementById('badges').append(card);
+    }
+
+    // ---- Cavalier drafts: the user's own SVGs in private/ ----
+    // Single-colour drafts are drawn inline with currentColor (so they follow the theme and badge colour).
+    // The multi-colour draft is shown as an image, which keeps its colours and keeps its CSS classes from
+    // clashing with the page. Hidden layers (e.g. the tracing image in icon 2) are left out.
+    const DRAFTS = [
+      { file: 'Cavalier icon 1.svg', multicolour: false },
+      { file: 'Cavalier icon 2.svg', multicolour: false },
+      { file: 'Cavalier icon 3.svg', multicolour: true },
+    ];
+
+    async function loadDraft({ file, multicolour }) {
+      const res = await fetch(`../private/${encodeURIComponent(file)}`);
+      if (!res.ok) throw new Error(`${file}: ${res.status}`);
+      const svg = new DOMParser().parseFromString(await res.text(), 'image/svg+xml').documentElement;
+      svg.querySelectorAll('image, title, [display="none"]').forEach((n) => n.remove());
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      if (multicolour) {
+        const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+        return (className) => Object.assign(document.createElement('img'), { src: url, className, alt: '' });
+      }
+      svg.querySelectorAll('style').forEach((n) => n.remove());
+      svg.querySelectorAll('path').forEach((p) => {
+        p.removeAttribute('class');
+        p.setAttribute('fill', 'currentColor');
+      });
+      return (className) => {
+        const copy = document.importNode(svg, true);
+        copy.setAttribute('class', className);
+        copy.setAttribute('aria-hidden', 'true');
+        return copy;
+      };
+    }
+
+    const dog = badgeColours(CATEGORIES.dog.color);
+    function badge(make, size) {
+      const node = document.createElement('span');
+      node.className = `cat-badge ${size}`;
+      node.style.setProperty('--cat', dog.badge);
+      node.style.setProperty('--cat-ink', dog.ink);
+      node.append(make('icon'));
+      return node;
+    }
+
+    for (const draft of DRAFTS) {
+      const card = document.createElement('div');
+      card.className = 'draft-card';
+      try {
+        const make = await loadDraft(draft);
+        const sizes = document.createElement('div');
+        sizes.className = 'row';
+        sizes.append(make('icon s16'), make('icon s24'), make('icon s56'));
+        const badges = document.createElement('div');
+        badges.className = 'row';
+        badges.append(badge(make, 'small'), badge(make, ''), badge(make, 'large'));
+        card.append(sizes, badges);
+      } catch (err) {
+        card.append(err.message);
+      }
+      const label = document.createElement('code');
+      label.textContent = `${draft.file}${draft.multicolour ? ' (5 colours)' : ''}`;
+      card.append(label);
+      document.getElementById('drafts').append(card);
+    }
+  </script>
+</body>
+</html>
