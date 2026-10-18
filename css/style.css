@@ -58,14 +58,7 @@
   --carry-border: #a9d6b5;
   --overlay: rgb(20 24 30 / 0.35);
   --shadow: 0 6px 24px rgb(0 0 0 / 0.18);
-  /* "only": phone browsers with a forced dark mode must leave the light theme alone (the app has its own). */
-  color-scheme: only light;
-}
-
-/* Samsung Internet keeps a site's own colours when the site has dark styles under this media query (and
-   the color-scheme meta tag): this rule is that signal. The app's dark theme is its default either way. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { color-scheme: dark; }
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }

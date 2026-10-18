@@ -4,10 +4,10 @@ const PATHS = {
   // Interface
   sun: '<circle cx="12" cy="12" r="4.6" fill="currentColor" stroke="none"/><path stroke-width="2.2" d="M12 1.8v2.4M12 19.8v2.4M4.8 4.8l1.7 1.7M17.5 17.5l1.7 1.7M1.8 12h2.4M19.8 12h2.4M4.8 19.2l1.7-1.7M17.5 6.5l1.7-1.7"/>',
   moon: '<path fill="currentColor" stroke="none" d="M20.6 14.6A8.8 8.8 0 1 1 9.4 3.4a7 7 0 0 0 11.2 11.2z"/>',
-  // Pin tilted 45°: filled when the top bar is pinned, outlined and crossed out when it isn't.
-  pin: '<g transform="rotate(45 12 12)"><path fill="currentColor" d="M8.5 2.5h7l-1.2 6.5 3.7 3.8H6l3.7-3.8z"/><path stroke-width="2" d="M12 12.8v8.7"/></g>',
-  // Same pin, outlined, pulled up: the needle is shorter and its tip stays where it was.
-  pinOff: '<g transform="rotate(45 12 12)"><path transform="translate(0 3.6)" d="M8.5 2.5h7l-1.2 6.5 3.7 3.8H6l3.7-3.8z"/><path stroke-width="2" d="M12 16.4v5.1"/></g>',
+  // Pin tilted 45°, top bar pinned: filled and pushed in (short needle; the tip stays where it is).
+  pin: '<g transform="rotate(45 12 12)"><path fill="currentColor" transform="translate(0 3.6)" d="M8.5 2.5h7l-1.2 6.5 3.7 3.8H6l3.7-3.8z"/><path stroke-width="2" d="M12 16.4v5.1"/></g>',
+  // Not pinned: the same pin outlined and pulled out (the whole needle shows).
+  pinOff: '<g transform="rotate(45 12 12)"><path d="M8.5 2.5h7l-1.2 6.5 3.7 3.8H6l3.7-3.8z"/><path stroke-width="2" d="M12 12.8v8.7"/></g>',
   calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
   // Solid arrow: stays readable on the half-transparent "back to top" button.
   arrowUp: '<path fill="currentColor" stroke-width="1.2" d="M12 3 20.5 12H15v9H9v-9H3.5z"/>',
