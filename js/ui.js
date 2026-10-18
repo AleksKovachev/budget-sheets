@@ -2,7 +2,7 @@
 
 import { storage } from './storage.js';
 import { icon } from './icons.js';
-import { signInEndedText } from './auth.js';
+import { signInEndedText, idleSecondsLeft, stayActive } from './auth.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -155,6 +155,8 @@ const THEME_KEY = 'bs.theme';
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+  // Colour of the phone's status bar (installed app), same as the top bar.
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#ffffff' : '#1d2024');
   const button = $('btn-theme');
   if (button) {
     const dark = document.documentElement.dataset.theme === 'dark';
@@ -269,6 +271,68 @@ function setUpPhoneSwitch() {
   button.after(icons);
 }
 
+// ---- Width check (add ?widthcheck to the address): what sticks out past the screen's edges ----
+
+// For finding layout problems on a phone: elements reaching past the left or right edge get a red outline
+// and are listed in a yellow box, re-checked every 2 seconds.
+function setUpWidthCheck() {
+  const box = el('div', 'width-check');
+  document.body.append(box);
+  const name = (node) => node.tagName.toLowerCase() + (node.id ? `#${node.id}` : '')
+    + (typeof node.className === 'string' && node.className.trim() ? `.${node.className.trim().split(/\s+/).join('.')}` : '');
+  const run = () => {
+    const width = document.documentElement.clientWidth;
+    const found = [];
+    for (const node of document.body.querySelectorAll('*')) {
+      if (box.contains(node)) continue;
+      const r = node.getBoundingClientRect();
+      if (!r.width || (r.right <= width + 0.5 && r.left >= -0.5)) continue;
+      node.style.outline = '2px solid red';
+      found.push(`${name(node)}: ${Math.round(r.left)} … ${Math.round(r.right)}`);
+    }
+    box.textContent = `Screen ${width}px wide, page ${document.documentElement.scrollWidth}px. `
+      + (found.length ? `Sticking out:\n${found.slice(0, 12).join('\n')}` : 'Nothing sticks out.');
+  };
+  setTimeout(run, 1500);
+  setInterval(run, 2000);
+}
+
+// ---- Warning before signing out for not being used (auth.js, IDLE_MS) ----
+
+const IDLE_WARNING_S = 120;
+
+// In the last two minutes: a countdown with "Stay signed in", which starts the wait again.
+function setUpIdleWarning() {
+  let box = null;
+  let text = null;
+  const update = () => {
+    const left = idleSecondsLeft();
+    if (left === null || left === 0 || left > IDLE_WARNING_S || document.visibilityState !== 'visible') {
+      box?.remove();
+      box = null;
+      return;
+    }
+    if (!box) {
+      box = el('div', 'idle-warning');
+      box.setAttribute('role', 'alert');
+      text = el('span');
+      const stay = el('button', 'primary', 'Stay signed in');
+      stay.type = 'button';
+      stay.addEventListener('click', () => {
+        stayActive();
+        update();
+      });
+      box.append(text, stay);
+    }
+    // Inside an open dialog when there is one: everything outside it can't be clicked meanwhile.
+    const container = document.querySelector('dialog[open]') || document.body;
+    if (box.parentElement !== container) container.append(box);
+    const time = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    text.textContent = `The app hasn't been used for a while: signing out in ${time}.`;
+  };
+  setInterval(update, 500);
+}
+
 // ---- Tooltips by finger: press and hold a button (phones have no mouse to hover with) ----
 
 function setUpTouchTips() {
@@ -314,11 +378,11 @@ function setUpTouchTips() {
   }, true);
 }
 
-// ---- "Open in Google Sheets" on Android phones: the phone's own "Open with" choice ----
+// ---- "Open in Google Sheets" on Android phones: in the Sheets app ----
 
-// An Android "intent" link for the spreadsheet that names no app: Android then asks which app opens it
-// (Sheets app, browsers), unless an app was set to always open such links. If nothing can, the normal
-// link opens.
+// An Android "intent" link for the spreadsheet: Android hands it to the app registered for Google Sheets
+// links (the Sheets app; it doesn't ask, and a page can't make it ask). Without the app, the normal link
+// opens in the browser.
 function openWithLink(href) {
   const url = new URL(href);
   // The tab (#gid=…) goes in as ?gid=… (Sheets understands both; an intent link can't contain another #).
@@ -361,4 +425,6 @@ export function setUpPage() {
   setUpPhoneSwitch();
   setUpTouchTips();
   setUpSheetsLink();
+  setUpIdleWarning();
+  if (new URLSearchParams(location.search).has('widthcheck')) setUpWidthCheck();
 }

@@ -121,7 +121,8 @@ function press(input, key) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// A line that shows "= 15.80" while the focused amount field holds a calculation (or says what's wrong).
+// Shows "= 15.80" while the focused amount field (inside `container`) holds a calculation, or "= ?" while
+// it's incomplete. Placed by the caller (next to the buttons).
 export function createResultLine(container) {
   const line = el('div', 'amount-result');
   line.setAttribute('aria-live', 'polite');
@@ -131,7 +132,8 @@ export function createResultLine(container) {
       return;
     }
     const value = evaluateAmount(input.value);
-    line.textContent = Number.isNaN(value) ? 'Not a complete calculation yet' : `= ${value.toFixed(2)}`;
+    line.textContent = Number.isNaN(value) ? '= ?' : `= ${value.toFixed(2)}`;
+    line.title = Number.isNaN(value) ? 'Not a complete calculation yet' : '';
   };
   container.addEventListener('input', (event) => update(event.target));
   container.addEventListener('focusin', (event) => update(event.target));

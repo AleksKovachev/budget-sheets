@@ -141,10 +141,11 @@ async function chosenSpreadsheet(email) {
 async function afterSignIn() {
   const email = await fetchUserEmail();
   me = await identifyPerson(email);
+  // Only the person's name in the top bar (the email address isn't shown).
   const who = $('user-email');
   who.replaceChildren();
-  if (me) who.append(personName(me), el('span', 'email', ` · ${email}`));
-  else who.textContent = email;
+  if (me) who.append(personName(me));
+  else who.textContent = 'Signed in';
   $('user').hidden = false;
   const id = await chosenSpreadsheet(email);
   if (id) await openSpreadsheet(id);

@@ -12,6 +12,11 @@
     try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
   </script>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <!-- Installing on the home screen as an app (manifest; the iPhone uses apple-touch-icon). -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icons/app-icon-180.png">
+  <meta name="apple-mobile-web-app-title" content="Budget Sheets">
+  <meta name="theme-color" content="#1d2024">
   <link rel="stylesheet" href="css/style.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script type="module" src="js/raw.js"></script>

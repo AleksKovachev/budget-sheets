@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- App icon (home screen): the favicon's sheet and coin on a full-bleed square, kept inside the middle
+       part that phones never crop (round, squircle or rounded-square masks). PNGs: tools/app_icons.py. -->
+  <rect width="512" height="512" fill="#00897b"/>
+  <g transform="translate(6 6) scale(14.3)">
+    <rect x="7" y="7" width="14" height="18" rx="2" fill="#ffffff"/>
+    <path d="M10 12h8M10 16h8M10 20h5" stroke="#00897b" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="22.5" cy="22.5" r="5.5" fill="#ffd54f" stroke="#00897b" stroke-width="1.6"/>
+    <path d="M22.5 19.8v5.4" stroke="#8a6100" stroke-width="1.6" stroke-linecap="round"/>
+  </g>
+</svg>

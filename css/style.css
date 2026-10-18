@@ -62,7 +62,16 @@
   color-scheme: only light;
 }
 
+/* Samsung Internet keeps a site's own colours when the site has dark styles under this media query (and
+   the color-scheme meta tag): this rule is that signal. The app's dark theme is its default either way. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; }
+}
+
 * { box-sizing: border-box; }
+/* Nothing may make the page wider than the screen (it would scroll sideways on phones). Clipping on the
+   root affects only the page's own sideways scrolling; sticky and fixed elements work as before. */
+html { overflow-x: clip; }
 [hidden] { display: none !important; }
 
 body {
@@ -221,6 +230,9 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
     select option:hover, select option:focus-visible { background: var(--hover); outline: none; }
     select option:checked { background: var(--pressed); font-weight: 600; }
     select hr { margin: 5px 6px; border: none; height: 1px; background: color-mix(in srgb, var(--muted) 70%, transparent); }
+    /* The year list ("New…", years) is wider than a year: the button gets that width too, so the list
+       doesn't open wider than the button and then shrink to it. */
+    #tab-select { min-width: 5.5rem; }
   }
 }
 .toggle-button { display: inline-flex; align-items: center; gap: 6px; }
@@ -419,7 +431,8 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
   justify-content: center;
 }
 .cat-badge .icon { width: 26px; height: 26px; } /* Line icons and category pictures alike. */
-.entry .cat { font-size: 12.5px; color: var(--muted); }
+/* Only as wide as the name (with a little room around it), so its highlight while picking fits the word. */
+.entry .cat { font-size: 12.5px; color: var(--muted); align-self: flex-start; max-width: calc(100% + 4px); padding: 0 4px; margin-left: -4px; }
 .desc-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .desc { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 16px; }
 .more {
@@ -551,8 +564,8 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
   right: 16px;
   bottom: 16px;
   z-index: 16;
-  width: 56px;
-  height: 56px;
+  width: 46px; /* As big as the back-to-top button (that one is see-through and white). */
+  height: 46px;
   border-radius: 50%;
   padding: 0;
   display: inline-flex;
@@ -563,10 +576,10 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
   color: var(--accent-text);
   box-shadow: var(--shadow);
 }
-body:has(.fab:not([hidden])) .to-top { right: 21px; bottom: 84px; }
+body:has(.fab:not([hidden])) .to-top { bottom: 72px; }
 .fab:hover { filter: brightness(1.08); }
 .fab:active { filter: brightness(0.92); }
-.fab svg.icon { width: 28px; height: 28px; }
+.fab svg.icon { width: 24px; height: 24px; }
 .to-top {
   position: fixed;
   right: 16px;
@@ -592,7 +605,7 @@ body:has(.fab:not([hidden])) .to-top { right: 21px; bottom: 84px; }
 /* Wide screens: right next to the cards instead of the far corner. */
 @media (min-width: 1340px) {
   .to-top { right: auto; left: calc(50% + 600px + 17px); }
-  .fab { right: auto; left: calc(50% + 600px + 12px); }
+  .fab { right: auto; left: calc(50% + 600px + 17px); }
 }
 
 /* ---- Raw data page ---- */
@@ -672,6 +685,46 @@ input.invalid { border-color: var(--personal); outline: 1px solid var(--personal
 /* Popups placed by placeFloating(): fixed on screen, also above dialogs. */
 .floating { position: fixed !important; z-index: 70; }
 
+/* ?widthcheck (ui.js): list of elements reaching past the screen's edges. */
+.width-check {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 100;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #ffd54f;
+  color: #1f2329;
+  font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+/* "Signing out in 1:45" with "Stay signed in" (ui.js), above everything, also above dialogs. */
+.idle-warning {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 90;
+  width: min(440px, calc(100% - 16px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.idle-warning span { flex: 1; }
+.idle-warning button { flex: none; }
+
 /* Tooltip shown by pressing and holding a button with a finger (ui.js). */
 .touch-tip {
   max-width: min(300px, calc(100vw - 16px));
@@ -729,30 +782,36 @@ button, .button { -webkit-user-select: none; user-select: none; -webkit-touch-ca
 }
 .add-zone:hover, .add-zone:focus-visible { opacity: 1; }
 
-/* Red ✕ on the right edge of the row under the mouse: deletes the entry (after asking). */
+/* Red ✕ on the right edge of a row: appears when the mouse comes near it (like the "+"), deletes the entry
+   after asking. The button is a larger invisible area around the circle. */
 .delete-x {
   position: absolute;
-  right: -12px;
+  right: -22px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 44px;
+  height: 32px;
   padding: 0;
   border: none;
-  border-radius: 50%;
-  background: var(--personal) !important;
-  color: #ffffff;
+  background: transparent !important;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow);
   opacity: 0;
   z-index: 3;
   transition: opacity 0.12s;
 }
-.delete-x svg.icon { width: 14px; height: 14px; }
-.entries .entry:hover .delete-x, .delete-x:focus-visible { opacity: 1; }
-.delete-x:active { filter: brightness(0.85); }
+.delete-x svg.icon {
+  width: 22px;
+  height: 22px;
+  padding: 5px;
+  border-radius: 50%;
+  background: var(--personal);
+  color: #ffffff;
+  box-shadow: var(--shadow);
+}
+.delete-x:hover, .delete-x:focus-visible { opacity: 1; }
+.delete-x:active svg.icon { filter: brightness(0.85); }
 @media (hover: none) {
   .delete-x { display: none; } /* Phones: press and hold an entry → Delete entry. */
 }
@@ -775,8 +834,8 @@ button, .button { -webkit-user-select: none; user-select: none; -webkit-touch-ca
 .keypad .key.op { color: var(--accent); font-size: 22px; }
 .keypad .key.clear { grid-column: span 2; color: var(--personal); font-size: 16px; }
 .keypad .key.equals { grid-column: span 2; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.amount-result { font-size: 13px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; min-height: 0; }
-.amount-result:not(:empty) { margin-top: 4px; }
+/* Result of a calculation, at the bottom left next to the buttons. */
+.amount-result { margin-right: auto; align-self: center; font-size: 15px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .amount-popup .keypad { margin-top: 8px; }
 .add-zone:active svg.icon { filter: brightness(0.9); }
 @media (hover: none) {
@@ -844,7 +903,8 @@ dialog.modal::backdrop { background: var(--overlay); }
      width without a scrollbar; dvh follows the space left next to the keyboard (see the viewport meta tag). */
   dialog.modal { width: calc(100% - 16px); max-width: calc(100% - 16px); margin: 8px auto auto; max-height: calc(100dvh - 16px); }
   .fab { right: 12px; bottom: 12px; }
-  body:has(.fab:not([hidden])) .to-top { right: 17px; bottom: 78px; }
+  .to-top { right: 12px; }
+  body:has(.fab:not([hidden])) .to-top { right: 12px; bottom: 68px; }
 }
 
 /* Column widths are set by raw.js from the content (fixed layout: editing never resizes anything). */

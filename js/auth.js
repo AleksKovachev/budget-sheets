@@ -145,6 +145,16 @@ function idleFor() {
   return Date.now() - (Number(storage.local.get(ACTIVE_KEY)) || 0);
 }
 
+// Seconds until the app signs out for not being used (null when signed out).
+export function idleSecondsLeft() {
+  return token ? Math.max(0, Math.ceil((IDLE_MS - idleFor()) / 1000)) : null;
+}
+
+// "Stay signed in": counts as using the app (the IDLE_MS wait starts again).
+export function stayActive() {
+  markActive(true);
+}
+
 // Watches for use of the page; onIdle() runs once the app (all its open pages together) has not been used
 // for IDLE_MS while signed in. The sign-in is already gone by then.
 export function watchIdle(onIdle) {
@@ -157,7 +167,7 @@ export function watchIdle(onIdle) {
       onIdle();
     }
   };
-  setInterval(check, 10_000);
+  setInterval(check, 1000);
   // A page coming back into view checks first (it was not used while hidden).
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') check();

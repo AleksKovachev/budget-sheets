@@ -11,7 +11,10 @@ export const SCOPES = [
 // encrypted once per person with a key made from their email address (js/secret.js), so the public page
 // doesn't show it. Made with dev/default-sheet.html: { aleks: '…', iliyana: '…' }.
 // Empty: the app asks for a spreadsheet URL. Only accounts the spreadsheet is shared with can open it anyway.
-export const DEFAULT_SPREADSHEET = {};
+export const DEFAULT_SPREADSHEET = {
+  aleks: 'FFVCyTlDi2MPHk1sNNMjgVJVNQRv1ifhyOVxVOZo8sOVMIrlbZACNF+pQW7accsRDCznJBoxIcgJejoAVn0zzia91kvwL/laqP00ef73c7OZ4cJ7/tVe5vNG1HdrV49NExh4tobL7IRCmJEIAGULgmOVrcc=',
+  iliyana: 'X5QPi031mzPprFEfWGi04RhLgyv4B0zw3jpzYG1q3DBF54IuRGKBJP5Z8tIzf16YEg8xXHbHpFcS2NgVxMsrNQc3deddtN+/tb+ThB1en/DXUoOlQx0I8eHjhNScomjSTG0xY4YPe2yQLo8MBR87r3qqiVA=',
+};
 
 // The two people, in the column order of the year tabs (SHEET_LAYOUT.md).
 // Emails are stored as SHA-256 hashes of the lower-case address, so the public page doesn't reveal them.

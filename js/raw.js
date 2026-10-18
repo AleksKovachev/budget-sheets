@@ -159,14 +159,8 @@ function fillYears() {
   const select = $('tab-select');
   const create = el('option', null, 'New…');
   create.value = NEW_YEAR;
-  // Phones show their own list, which leaves out <hr> lines: there the separator is a line of text.
-  let separator = el('hr');
-  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-    separator = el('option', null, '──────────');
-    separator.disabled = true;
-    separator.value = '';
-  }
-  select.replaceChildren(create, separator, ...yearTitles.map((t) => el('option', null, t)));
+  // (Phones show their own list, which leaves the line out.)
+  select.replaceChildren(create, el('hr'), ...yearTitles.map((t) => el('option', null, t)));
   select.value = tab && yearTitles.includes(tab) ? tab : yearTitles[0];
 }
 
@@ -1030,8 +1024,12 @@ $('grid').addEventListener('click', (event) => {
   if (number) {
     event.stopPropagation();
     const r = Number(number.dataset.r);
-    if (touchInput()) selectRow(r, { toggle: true });
-    else rowMenuFor(number);
+    if (touchInput()) {
+      closePopups(); // An open dropdown or row menu closes, as a tap anywhere else would.
+      selectRow(r, { toggle: true });
+    } else {
+      rowMenuFor(number);
+    }
     return;
   }
   const td = event.target.closest('td');
@@ -1063,6 +1061,28 @@ $('grid').addEventListener('click', (event) => {
     beginEdit(td, r, c);
   }
 });
+
+// The mouse wheel scrolls the table from anywhere on the page (nothing else here needs it), Shift + wheel
+// sideways. Once the table is at its end, the page itself scrolls as usual.
+let wheelGoal = null; // { left, top, at }: where the table is gliding to (successive turns add up)
+document.addEventListener('wheel', (event) => {
+  const wrap = document.querySelector('.grid-wrap');
+  if (!wrap || $('view-raw').hidden || event.ctrlKey) return;
+  if (event.target.closest('.grid-wrap, .menu, .choice-list, .date-popup, dialog, select')) return;
+  const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? wrap.clientHeight : 1;
+  let dx = event.deltaX * unit;
+  let dy = event.deltaY * unit;
+  if (event.shiftKey && !dx) [dx, dy] = [dy, 0];
+  const maxLeft = wrap.scrollWidth - wrap.clientWidth;
+  const maxTop = wrap.scrollHeight - wrap.clientHeight;
+  const from = wheelGoal && Date.now() - wheelGoal.at < 300 ? wheelGoal : { left: wrap.scrollLeft, top: wrap.scrollTop };
+  const left = Math.min(maxLeft, Math.max(0, from.left + dx));
+  const top = Math.min(maxTop, Math.max(0, from.top + dy));
+  if (Math.abs(left - from.left) < 1 && Math.abs(top - from.top) < 1) return;
+  event.preventDefault();
+  wheelGoal = { left, top, at: Date.now() };
+  wrap.scrollTo({ left, top, behavior: 'smooth' });
+}, { passive: false });
 
 // Clicks inside the grid shouldn't close the popup they just opened.
 $('grid').addEventListener('pointerdown', (event) => {

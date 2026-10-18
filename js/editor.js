@@ -331,8 +331,8 @@ export function createEditor(ctx) {
     };
     const buttons = el('div', 'popup-buttons');
     buttons.append(dialogButton('Cancel', null, closePopup), dialogButton('Save', 'primary', save));
-    const result = createResultLine(panel);
-    panel.append(tabs.node, fields, result, ...(useKeypad() ? [createKeypad(panel)] : []), error, buttons);
+    buttons.prepend(createResultLine(panel));
+    panel.append(tabs.node, fields, ...(useKeypad() ? [createKeypad(panel)] : []), error, buttons);
     drawFields(); // Before placing, so the popup's full height is known.
     showPopup(panel, anchor);
     inputs.paid.focus();
@@ -479,7 +479,12 @@ export function createEditor(ctx) {
     const pad = useKeypad() ? createKeypad(body) : null;
     if (pad) {
       pad.hidden = true;
-      body.addEventListener('focusin', (event) => { pad.hidden = !event.target.classList.contains('amount-input'); });
+      body.addEventListener('focusin', (event) => {
+        const wasHidden = pad.hidden;
+        pad.hidden = !event.target.classList.contains('amount-input');
+        // Phones: the dialog scrolls so the whole keypad is in view (it sits near the bottom).
+        if (wasHidden && !pad.hidden) setTimeout(() => pad.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
+      });
     }
     body.append(
       formField('Date', dateRow),
@@ -487,7 +492,6 @@ export function createEditor(ctx) {
       formField('Description', description),
       formField('Who', tabs.node),
       amountFields,
-      createResultLine(body),
       ...(pad ? [pad] : []),
       el('p', 'muted form-hint', 'Paid: shared 50/50 · Personal: the part of "Paid" that was only for this person · Cash in: money given to the other person. Amounts can be calculations, e.g. 12.40+3.60.'),
       error,
@@ -531,7 +535,7 @@ export function createEditor(ctx) {
         add.textContent = 'Add record';
       }
     });
-    foot.append(dialogButton('Cancel', null, () => close('cancel')), add);
+    foot.append(createResultLine(body), dialogButton('Cancel', null, () => close('cancel')), add);
     body.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
         event.preventDefault();
