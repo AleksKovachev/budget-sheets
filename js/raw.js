@@ -5,9 +5,9 @@
 // - Rows are coloured by category like in the sheet; rows can be inserted and deleted from the row number.
 // - The grid re-reads the tab regularly (the current year often, older years about once a minute).
 
-import { isConfigured, initAuth, signIn, dropToken, getAccessToken } from './auth.js';
+import { isConfigured, initAuth, signIn, dropToken, getAccessToken, watchIdle, IDLE_MS } from './auth.js';
 import {
-  ApiError, parseSpreadsheetId, quoteTab, getSpreadsheet, getGrid, batchGetValues,
+  ApiError, quoteTab, getSpreadsheet, getGrid, batchGetValues,
   updateValues, updateValuesRaw, clearValues, insertRows, deleteRows, batchUpdateValues, batchClearValues, duplicateSheet,
   spreadsheetUrl,
 } from './sheets.js';
@@ -15,12 +15,14 @@ import { serialToBg, bgToIso, isoToBg, isoToSerial } from './dates.js';
 import { isYearTab, CARRY_ROW } from './budget.js';
 import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.js';
 import { storage, SHEET_KEY, TAB_KEY } from './storage.js';
-import { $, el, showError, columnLetter, setUpPage, withLoading, showSessionBanner, openDialog, dialogButton } from './ui.js';
+import {
+  $, el, showError, columnLetter, setUpPage, withLoading, showSessionBanner, openDialog, dialogButton, touchInput,
+} from './ui.js';
 import { cannotCreate, confirmCreate, createYearTab } from './yeartabs.js';
 import { icon, categoryIcon } from './icons.js';
 import { startSync, SYNC_INTERVAL_MS, PAST_YEARS_MS } from './sync.js';
 import { openDatePopup, closeDatePopup } from './calendar.js';
-import { DEFAULT_SPREADSHEET_URL, categoryStyle } from './config.js';
+import { categoryStyle } from './config.js';
 
 const MAX_ROWS = 1000;
 const EXTRA_ROWS = 20; // Empty rows shown below the data, so they can be typed into.
@@ -49,6 +51,7 @@ let dataRows = 0;
 let editing = null; // { td, r, c, control, original }
 let busy = false; // A save or load is running; syncing waits.
 let sync = null;
+let selectedRow = null; // 0-based row marked across the grid (tap its number or a cell in it).
 
 function show(view) {
   for (const v of VIEWS) $(v).hidden = v !== view;
@@ -72,7 +75,7 @@ async function run(action, { overlay = true } = {}) {
       dropToken();
       // With the table on screen, keep it and ask to sign in again; otherwise show the sign-in card.
       if (sync) showSessionBanner(sync.renew);
-      else show('view-signin');
+      else showSignIn(false);
       return;
     }
     if (err instanceof ApiError && err.status === 403) {
@@ -103,19 +106,34 @@ async function start() {
     showMessage('No Google client ID is configured yet (see SETUP.md).');
     return;
   }
+  let ended;
   try {
-    await initAuth();
+    ended = await initAuth();
   } catch (err) {
     showMessage(err.message);
     return;
   }
-  spreadsheetId = storage.local.get(SHEET_KEY) || parseSpreadsheetId(DEFAULT_SPREADSHEET_URL);
+  // (The default spreadsheet is opened, and remembered, by the main page.)
+  spreadsheetId = storage.local.get(SHEET_KEY);
   if (!spreadsheetId) {
-    showMessage('No spreadsheet has been chosen yet. Open one on the main page first.');
+    showMessage('No spreadsheet has been chosen yet. Open the main page (Budget Sheets, top left) first.');
     return;
   }
+  watchIdle(() => {
+    closePopups();
+    if (editing) cancelEdit();
+    sync?.pause();
+    showError(null);
+    showSignIn(true);
+  });
   if (getAccessToken()) await run(open);
-  else show('view-signin');
+  else showSignIn(ended === 'idle');
+}
+
+function showSignIn(idle) {
+  $('signin-note').hidden = !idle;
+  $('signin-note').textContent = idle ? `Signed out after ${IDLE_MS / 60_000} minutes without use.` : '';
+  show('view-signin');
 }
 
 async function open() {
@@ -129,6 +147,7 @@ async function open() {
   $('tab-select').value = first;
   await loadTab(first);
   // The current year can change any moment; older years only when fixing something.
+  sync?.resume();
   sync ??= startSync(syncNow, { interval: () => (tab === yearTitles[0] ? SYNC_INTERVAL_MS : PAST_YEARS_MS), offline: fixture });
 }
 
@@ -140,7 +159,14 @@ function fillYears() {
   const select = $('tab-select');
   const create = el('option', null, 'New…');
   create.value = NEW_YEAR;
-  select.replaceChildren(create, el('hr'), ...yearTitles.map((t) => el('option', null, t)));
+  // Phones show their own list, which leaves out <hr> lines: there the separator is a line of text.
+  let separator = el('hr');
+  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+    separator = el('option', null, '──────────');
+    separator.disabled = true;
+    separator.value = '';
+  }
+  select.replaceChildren(create, separator, ...yearTitles.map((t) => el('option', null, t)));
   select.value = tab && yearTitles.includes(tab) ? tab : yearTitles[0];
 }
 
@@ -296,6 +322,7 @@ function buildCells(rowData) {
 
 async function loadTab(title) {
   closePopups();
+  if (title !== tab) selectedRow = null;
   tab = title;
   storage.local.set(TAB_KEY, title);
   history.replaceState(null, '', `?tab=${encodeURIComponent(title)}${fixture ? '&fixture' : ''}`);
@@ -444,9 +471,10 @@ function renderGrid() {
   for (let r = 0; r < rows; r++) {
     const tr = r < frozen ? thead.insertRow() : body.insertRow();
     if (r < frozen) tr.className = r === frozen - 1 ? 'frozen frozen-last' : 'frozen';
+    else if (r === selectedRow) tr.className = 'selected';
     const number = el('th', 'row-number', String(r + 1));
     number.dataset.r = r;
-    number.title = 'Row options: insert, copy, paste, clear or delete';
+    number.title = 'Row options (insert, copy, paste, clear, delete): click, right-click, or press and hold the row';
     tr.append(number);
     for (let c = 0; c < columns; c++) {
       const td = tr.insertCell();
@@ -948,22 +976,74 @@ function setUpFocusMode() {
 
 // ---- Events ----
 
+// Marks a row across the grid (not the frozen header rows). toggle: the marked row again unmarks it.
+function selectRow(r, { toggle = false } = {}) {
+  if (r < frozenRows()) return;
+  selectedRow = toggle && selectedRow === r ? null : r;
+  for (const tr of $('grid').tBodies[0]?.rows || []) {
+    tr.classList.toggle('selected', Number(tr.cells[0]?.dataset.r) === selectedRow);
+  }
+}
+
+// Row menu: a click on the row number (mouse), a right-click on the row, or pressing and holding the row
+// (finger). A tap on the row number by finger only marks the row.
+let lastRowMenuAt = 0;
+function rowMenuFor(target) {
+  const tr = target.closest('#grid tr');
+  const number = tr?.querySelector('th.row-number');
+  if (!number) return false;
+  if (Date.now() - lastRowMenuAt < 800) return true; // Press and hold, and the browser's own menu event.
+  lastRowMenuAt = Date.now();
+  const r = Number(number.dataset.r);
+  selectRow(r);
+  openRowMenu(number, r);
+  return true;
+}
+$('grid').addEventListener('contextmenu', (event) => {
+  if (event.target.closest('input, select') || !rowMenuFor(event.target)) return;
+  event.preventDefault();
+});
+let pressTimer = 0;
+let pressStart = null;
+let suppressNextClick = false;
+$('grid').addEventListener('pointerdown', (event) => {
+  clearTimeout(pressTimer);
+  if (event.pointerType === 'mouse' || event.target.closest('input, select, .cell-cal')) return;
+  pressStart = { x: event.clientX, y: event.clientY };
+  pressTimer = setTimeout(() => {
+    if (rowMenuFor(event.target)) suppressNextClick = true;
+  }, 550);
+});
+$('grid').addEventListener('pointermove', (event) => {
+  if (pressStart && Math.hypot(event.clientX - pressStart.x, event.clientY - pressStart.y) > 10) clearTimeout(pressTimer);
+});
+for (const type of ['pointerup', 'pointercancel']) $('grid').addEventListener(type, () => clearTimeout(pressTimer));
+// The click that ends a press and hold must not also edit the cell.
+$('grid').addEventListener('click', (event) => {
+  if (!suppressNextClick) return;
+  suppressNextClick = false;
+  event.stopImmediatePropagation();
+}, true);
+
 $('grid').addEventListener('click', (event) => {
   const number = event.target.closest('th.row-number');
   if (number) {
     event.stopPropagation();
-    openRowMenu(number, Number(number.dataset.r));
+    const r = Number(number.dataset.r);
+    if (touchInput()) selectRow(r, { toggle: true });
+    else rowMenuFor(number);
     return;
   }
   const td = event.target.closest('td');
   if (!td || td.classList.contains('editing') || td.classList.contains('saving')) return;
+  const r = Number(td.dataset.r);
+  const c = Number(td.dataset.c);
+  selectRow(r);
   if (!fixture && !getAccessToken()) {
     // Signed out after an hour: editing would fail when saving, so ask to sign in first.
     showSessionBanner(sync.renew);
     return;
   }
-  const r = Number(td.dataset.r);
-  const c = Number(td.dataset.c);
   if (isLocked(r, c)) {
     setStatus(`${columnLetter(c)}${r + 1} is locked (${cellAt(r, c).formula ? 'formula' : 'header row'}); change it in Google Sheets.`);
     return;

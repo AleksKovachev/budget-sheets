@@ -58,7 +58,8 @@
   --carry-border: #a9d6b5;
   --overlay: rgb(20 24 30 / 0.35);
   --shadow: 0 6px 24px rgb(0 0 0 / 0.18);
-  color-scheme: light;
+  /* "only": phone browsers with a forced dark mode must leave the light theme alone (the app has its own). */
+  color-scheme: only light;
 }
 
 * { box-sizing: border-box; }
@@ -198,6 +199,30 @@ select[data-pointer]:focus-visible { outline: none; }
 
 /* Separate rule: browsers that don't know :open just skip it. */
 select:open, select:open:hover { background: var(--pressed); border-color: var(--accent); }
+
+/* With a mouse, dropdown lists are drawn by the app (browsers that support it): highlights with some room
+   around them, so separator lines stay visible. Phones keep their own list. */
+@media (hover: hover) and (pointer: fine) {
+  @supports (appearance: base-select) {
+    select, ::picker(select) { appearance: base-select; }
+    select { display: inline-flex; align-items: center; gap: 6px; }
+    select::picker-icon { color: var(--muted); font-size: 11px; }
+    ::picker(select) {
+      padding: 4px;
+      margin-top: 2px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow);
+    }
+    select option { padding: 5px 10px; border-radius: 5px; }
+    select option::checkmark { display: none; }
+    select option:hover, select option:focus-visible { background: var(--hover); outline: none; }
+    select option:checked { background: var(--pressed); font-weight: 600; }
+    select hr { margin: 5px 6px; border: none; height: 1px; background: color-mix(in srgb, var(--muted) 70%, transparent); }
+  }
+}
 .toggle-button { display: inline-flex; align-items: center; gap: 6px; }
 /* A link styled as an icon-only button (e.g. "Open in Google Sheets"). */
 .button.icon-button { display: inline-flex; padding: 6px; gap: 0; }
@@ -246,6 +271,14 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
 .totals thead th { background: var(--head); font-size: 13px; text-align: right; }
 .totals thead th:first-child { text-align: left; }
 .totals tbody th { text-align: left; font-weight: normal; color: var(--muted); }
+/* Fixed sizes, so switching periods doesn't move the columns: the row names' column just fits them (the
+   period's name above them wraps if longer), and the two people share the rest equally. Only a sum too
+   large for its half switches to sizes from the content ("fit", set by app.js). */
+.totals { table-layout: fixed; }
+.totals.fit { table-layout: auto; }
+.totals th:first-child { width: 6.5rem; }
+.totals thead th:first-child { white-space: normal; }
+.totals td { overflow: hidden; }
 .totals td { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--pc); }
 .totals th + th, .totals th + td, .totals td + td { border-left: 1px solid var(--line); }
 .totals tbody tr:nth-child(even) { background: var(--row-alt); }
@@ -580,6 +613,8 @@ body:has(.fab:not([hidden])) .to-top { right: 21px; bottom: 84px; }
 }
 
 .focus-button { display: inline-flex; align-items: center; gap: 6px; }
+/* The Focus button is as tall as the dropdowns next to it (its icon would make it taller). */
+.toolbar select, .toolbar .focus-button { height: 32px; padding-top: 0; padding-bottom: 0; }
 .row-number { cursor: pointer; }
 .row-number:hover { color: var(--accent) !important; }
 
@@ -636,6 +671,20 @@ body:has(.fab:not([hidden])) .to-top { right: 21px; bottom: 84px; }
 input.invalid { border-color: var(--personal); outline: 1px solid var(--personal); }
 /* Popups placed by placeFloating(): fixed on screen, also above dialogs. */
 .floating { position: fixed !important; z-index: 70; }
+
+/* Tooltip shown by pressing and holding a button with a finger (ui.js). */
+.touch-tip {
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+/* Pressing and holding a button shows its tooltip, not a text selection or the browser's link menu. */
+button, .button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 /* ---- Editing on the main page ---- */
 
@@ -800,6 +849,8 @@ dialog.modal::backdrop { background: var(--overlay); }
 
 /* Column widths are set by raw.js from the content (fixed layout: editing never resizes anything). */
 #grid { border-collapse: separate; border-spacing: 0; font-size: 14px; table-layout: fixed; }
+/* Pressing and holding a row opens its menu, so no text selection or browser menu (the editors are inputs). */
+#grid th, #grid td { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 #grid th, #grid td {
   border-right: 1px solid var(--grid-line);
   border-bottom: 1px solid var(--grid-line);
@@ -864,6 +915,10 @@ dialog.modal::backdrop { background: var(--overlay); }
 /* Cell whose dropdown or calendar is open, and the row whose menu is open. */
 #grid td.is-open { box-shadow: inset 0 0 0 2px var(--accent); filter: brightness(0.92); }
 #grid th.row-number.is-open { background: var(--pressed); color: var(--accent); }
+/* Selected row (tap its number, or a cell in it): marked across the whole width, easy to follow while
+   scrolling sideways. Lower priority than the cell states above (:where). */
+#grid :where(tr.selected) > td { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+#grid tr.selected th.row-number { background: var(--accent) !important; color: var(--accent-text); }
 #grid td.editable:active { filter: brightness(0.9); }
 /* "Owns the other": the result that matters most, red and bold as in the sheet. */
 #grid td.owes { color: var(--personal); font-weight: 700; }

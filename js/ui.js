@@ -2,6 +2,7 @@
 
 import { storage } from './storage.js';
 import { icon } from './icons.js';
+import { signInEndedText } from './auth.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -11,6 +12,13 @@ export function el(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
+
+// True when the last tap came from a finger or a pen (phones, tablets) rather than a mouse. Used to skip the
+// on-screen keyboard where the app has its own input (calendar, amount keypad). Decided by the tap itself:
+// screen-type checks aren't reliable (phones with a pen can report a mouse-like pointer).
+let lastPointerType = window.matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
+document.addEventListener('pointerdown', (event) => { lastPointerType = event.pointerType || 'mouse'; }, true);
+export const touchInput = () => lastPointerType !== 'mouse';
 
 export function showError(err) {
   const box = $('error');
@@ -119,7 +127,7 @@ export function showSessionBanner(onSignIn) {
   const button = el('button', 'primary', 'Sign in again');
   button.type = 'button';
   button.addEventListener('click', () => onSignIn().catch((err) => showError(err)));
-  bar.append(el('span', null, 'Your Google sign-in has run out (it lasts one hour), so syncing and saving are paused.'), button);
+  bar.append(el('span', null, signInEndedText()), button);
   document.querySelector('main')?.prepend(bar);
 }
 
@@ -261,6 +269,77 @@ function setUpPhoneSwitch() {
   button.after(icons);
 }
 
+// ---- Tooltips by finger: press and hold a button (phones have no mouse to hover with) ----
+
+function setUpTouchTips() {
+  let timer = 0;
+  let start = null;
+  let tip = null;
+  let shownAt = 0;
+  const hide = () => {
+    tip?.remove();
+    tip = null;
+  };
+  document.addEventListener('pointerdown', (event) => {
+    hide();
+    clearTimeout(timer);
+    if (event.pointerType === 'mouse') return;
+    const target = event.target.closest?.('[title]');
+    // Entry rows and the raw grid have their own press-and-hold menu.
+    if (!target || !target.title || target.closest('input, textarea, .entries .entry.editable, #grid')) return;
+    start = { x: event.clientX, y: event.clientY };
+    timer = setTimeout(() => {
+      tip = el('div', 'touch-tip', target.title);
+      tip.setAttribute('role', 'tooltip');
+      placeFloating(tip, target);
+      shownAt = Date.now();
+      setTimeout(hide, 4000);
+    }, 500);
+  }, true);
+  document.addEventListener('pointermove', (event) => {
+    if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) clearTimeout(timer);
+  }, true);
+  for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => clearTimeout(timer), true);
+  window.addEventListener('scroll', hide, { passive: true });
+  // Letting go after the tooltip appeared doesn't also press the button, nor open the browser's menu.
+  document.addEventListener('click', (event) => {
+    if (Date.now() - shownAt < 1500) {
+      shownAt = 0;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+  document.addEventListener('contextmenu', (event) => {
+    if (tip || Date.now() - shownAt < 1500) event.preventDefault();
+  }, true);
+}
+
+// ---- "Open in Google Sheets" on Android phones: the phone's own "Open with" choice ----
+
+// An Android "intent" link for the spreadsheet that names no app: Android then asks which app opens it
+// (Sheets app, browsers), unless an app was set to always open such links. If nothing can, the normal
+// link opens.
+function openWithLink(href) {
+  const url = new URL(href);
+  // The tab (#gid=…) goes in as ?gid=… (Sheets understands both; an intent link can't contain another #).
+  const gid = url.hash.match(/gid=(\d+)/)?.[1];
+  if (gid) url.searchParams.set('gid', gid);
+  url.hash = '';
+  return `intent://${url.host}${url.pathname}${url.search}#Intent;scheme=https;action=android.intent.action.VIEW;`
+    + `category=android.intent.category.BROWSABLE;S.browser_fallback_url=${encodeURIComponent(href)};end`;
+}
+
+function setUpSheetsLink() {
+  const link = $('btn-sheets');
+  if (!link || !/Android/i.test(navigator.userAgent)) return;
+  link.addEventListener('click', (event) => {
+    const href = link.href;
+    if (!href.startsWith('https://docs.google.com/')) return; // (Fixture: no real spreadsheet.)
+    event.preventDefault();
+    location.href = openWithLink(href);
+  });
+}
+
 export function setUpPage() {
   // After picking from a dropdown, it shouldn't stay focused (and look different) until clicked elsewhere.
   document.addEventListener('change', (event) => {
@@ -280,4 +359,6 @@ export function setUpPage() {
   setUpPin();
   setUpBackToTop();
   setUpPhoneSwitch();
+  setUpTouchTips();
+  setUpSheetsLink();
 }

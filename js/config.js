@@ -7,10 +7,11 @@ export const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
-// Spreadsheet opened when none has been chosen in this browser yet (new device, incognito).
-// Empty while developing against the test copy; set to the real spreadsheet's URL at release.
-// Only accounts the spreadsheet is shared with can open it, so the URL alone grants nothing.
-export const DEFAULT_SPREADSHEET_URL = '';
+// Spreadsheet opened when none has been chosen in this browser yet (new device, incognito): its URL,
+// encrypted once per person with a key made from their email address (js/secret.js), so the public page
+// doesn't show it. Made with dev/default-sheet.html: { aleks: '…', iliyana: '…' }.
+// Empty: the app asks for a spreadsheet URL. Only accounts the spreadsheet is shared with can open it anyway.
+export const DEFAULT_SPREADSHEET = {};
 
 // The two people, in the column order of the year tabs (SHEET_LAYOUT.md).
 // Emails are stored as SHA-256 hashes of the lower-case address, so the public page doesn't reveal them.

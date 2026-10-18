@@ -4,7 +4,7 @@
 // unless the caller handles the pick itself (e.g. the period picker's "Months" mode).
 // Dates are ISO strings ('YYYY-MM-DD'); arithmetic in UTC so daylight saving never shifts a day.
 
-import { el, placeFloating } from './ui.js';
+import { el, placeFloating, touchInput } from './ui.js';
 import { icon } from './icons.js';
 import { isoToBg, bgToIso } from './dates.js';
 
@@ -240,7 +240,9 @@ export function openDatePopup({ anchor, value, onPick, onClear, typed = false })
   openPopup = popup;
   openAnchor = anchor;
   anchor.classList.add('is-open');
-  if (input) {
+  // Ready for typing with a keyboard; by finger the calendar is what's used, so no on-screen keyboard
+  // (it would cover the calendar). Tapping the field still allows typing.
+  if (input && !touchInput()) {
     input.focus();
     input.select();
   }

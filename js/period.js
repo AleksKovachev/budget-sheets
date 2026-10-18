@@ -50,10 +50,11 @@ function shift(period, direction) {
 
 export class PeriodPicker {
   // years: () => list of years with data (newest first). onChange(period) is called on every change.
-  constructor({ years, onChange }) {
+  // period: the one to start with (default: this month).
+  constructor({ years, onChange, period = monthPeriod(todayIso()) }) {
     this.years = years;
     this.onChange = onChange;
-    this.period = monthPeriod(todayIso());
+    this.period = period;
     this.mode = 'custom';
     this.cal = { view: 'days', shown: monthStart(this.period.to) };
     this.anchor = null; // First clicked day while picking a custom range.
@@ -84,6 +85,14 @@ export class PeriodPicker {
     this.updateButton();
     this.close();
     this.onChange(period);
+  }
+
+  // Shows `period` without calling onChange (e.g. after signing out, when there's nothing to load).
+  reset(period) {
+    this.period = period;
+    this.anchor = null;
+    this.close();
+    this.updateButton();
   }
 
   updateButton() {

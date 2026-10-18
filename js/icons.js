@@ -19,6 +19,7 @@ const PATHS = {
   sortDown: '<path fill="currentColor" stroke-width="1.4" d="M12 19.5 19 11h-4.2V4.5H9.2V11H5z"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   sync: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/>',
+  reset: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/>', // (sync, mirrored)
   close: '<path stroke-width="2.2" d="M6 6l12 12M18 6 6 18"/>',
   plus: '<path stroke-width="2.4" d="M12 5v14M5 12h14"/>',
   chevronLeft: '<path d="M15 5l-7 7 7 7"/>',

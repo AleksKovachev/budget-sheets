@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Default spreadsheet – Budget Sheets</title>
+  <script>
+    try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
+  </script>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../css/style.css">
+  <style>
+    .tool { max-width: 640px; }
+    .tool label { display: block; margin: 14px 0 4px; }
+    .tool input { width: 100%; }
+    .tool .ok { color: var(--accent); }
+    .tool .bad { color: var(--personal); }
+    .tool textarea { width: 100%; min-height: 110px; font: 13px/1.4 ui-monospace, Consolas, monospace; background: var(--input-bg, var(--surface)); color: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+    .tool .actions { display: flex; gap: 10px; margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <main class="wrap tool">
+    <h1>Default spreadsheet</h1>
+    <p class="muted">
+      Makes the <code>DEFAULT_SPREADSHEET</code> value for <code>js/config.js</code>: the spreadsheet's URL,
+      encrypted once per person with a key made from their email address. Everything happens in this page;
+      nothing is sent anywhere.
+    </p>
+    <form id="form" class="card">
+      <label for="url">Spreadsheet URL</label>
+      <input id="url" type="text" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" required>
+      <div id="people"></div>
+      <div class="actions">
+        <button type="submit" class="primary">Make</button>
+      </div>
+      <label for="out">Result (paste into js/config.js, or send it to Claude)</label>
+      <textarea id="out" readonly></textarea>
+      <p id="msg" class="muted"></p>
+    </form>
+    <p><a href="../index.html">← Back to Budget Sheets</a></p>
+  </main>
+  <script type="module">
+    import { PEOPLE } from '../js/config.js';
+    import { identifyPerson } from '../js/budget.js';
+    import { parseSpreadsheetId } from '../js/sheets.js';
+    import { encryptFor, decryptFor } from '../js/secret.js';
+    import { el } from '../js/ui.js';
+
+    const inputs = {};
+    for (const person of PEOPLE) {
+      const label = el('label', null, `${person.name}'s Google email `);
+      const state = el('span', 'muted');
+      label.append(state);
+      const input = el('input');
+      input.type = 'email';
+      input.autocomplete = 'off';
+      input.addEventListener('input', async () => {
+        const match = await identifyPerson(input.value);
+        const ok = match?.key === person.key;
+        state.className = ok ? 'ok' : input.value ? 'bad' : 'muted';
+        state.textContent = ok ? '✓ matches' : input.value ? '✗ not this person\'s address' : '';
+      });
+      inputs[person.key] = input;
+      document.getElementById('people').append(label, input);
+    }
+
+    document.getElementById('form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const msg = document.getElementById('msg');
+      const out = document.getElementById('out');
+      out.value = '';
+      const url = document.getElementById('url').value.trim();
+      const id = parseSpreadsheetId(url);
+      if (!id) return void (msg.textContent = 'That does not look like a Google Sheets URL.');
+      const lines = [];
+      for (const person of PEOPLE) {
+        const email = inputs[person.key].value;
+        if ((await identifyPerson(email))?.key !== person.key) {
+          return void (msg.textContent = `${person.name}'s email doesn't match the one the app knows.`);
+        }
+        const packed = await encryptFor(email, `https://docs.google.com/spreadsheets/d/${id}/edit`);
+        if (parseSpreadsheetId((await decryptFor(email, packed)) || '') !== id) return void (msg.textContent = 'Check failed; nothing made.');
+        lines.push(`  ${person.key}: '${packed}',`);
+      }
+      out.value = `export const DEFAULT_SPREADSHEET = {\n${lines.join('\n')}\n};`;
+      msg.textContent = 'Done, and checked: each value decrypts back to the spreadsheet with that person\'s email.';
+    });
+  </script>
+</body>
+</html>

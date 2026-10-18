@@ -8,7 +8,7 @@
 // (a page can't renew it on its own: Google needs a click), and clicking it renews the sign-in.
 
 import { $, el, showSessionBanner, hideSessionBanner } from './ui.js';
-import { getAccessToken, secondsLeft, signIn } from './auth.js';
+import { getAccessToken, secondsLeft, signIn, dropToken } from './auth.js';
 
 export const SYNC_INTERVAL_MS = 5000;
 export const PAST_YEARS_MS = 60_000;
@@ -38,8 +38,10 @@ export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = fa
     await syncNow();
   }
 
+  let paused = false; // Signed out: no syncing and no "sign in again" bar (the page shows the sign-in card).
+
   async function syncNow() {
-    if (running || document.visibilityState !== 'visible') return;
+    if (paused || running || document.visibilityState !== 'visible') return;
     if (!signedIn()) {
       showSessionBanner(renew);
       return;
@@ -55,7 +57,10 @@ export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = fa
     } catch (err) {
       console.error(err);
       lastError = err;
-      if (err.status === 401) showSessionBanner(renew);
+      if (err.status === 401) {
+        dropToken();
+        showSessionBanner(renew);
+      }
     } finally {
       running = false;
       due = Date.now() + (done ? interval() : 1000);
@@ -63,6 +68,8 @@ export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = fa
   }
 
   function tick() {
+    button.hidden = paused;
+    if (paused) return;
     const hidden = document.visibilityState !== 'visible';
     const left = Math.max(0, due - Date.now());
     const expired = !signedIn();
@@ -94,7 +101,14 @@ export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = fa
   window.addEventListener('focus', syncNow);
   tick();
   // reschedule(): call when interval() changes (e.g. another year was opened).
-  return { syncNow, renew, reschedule: () => { due = Math.min(due, Date.now() + interval()); } };
+  // pause() after signing out, resume() once signed in again.
+  return {
+    syncNow,
+    renew,
+    reschedule: () => { due = Math.min(due, Date.now() + interval()); },
+    pause: () => { paused = true; hideSessionBanner(); tick(); },
+    resume: () => { paused = false; lastError = null; hideSessionBanner(); due = Date.now() + interval(); tick(); },
+  };
 }
 
 function createRing() {

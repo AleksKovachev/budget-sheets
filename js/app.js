@@ -1,7 +1,8 @@
 // Main page: sign in, choose a spreadsheet, show the entries of a chosen period (read-only for now),
 // kept in sync with Google Sheets.
 
-import { isConfigured, initAuth, signIn, signOut, dropToken, getAccessToken, fetchUserEmail } from './auth.js';
+import { isConfigured, initAuth, signIn, signOut, dropToken, getAccessToken, fetchUserEmail, watchIdle, IDLE_MS } from './auth.js';
+import { decryptFor } from './secret.js';
 import {
   ApiError, parseSpreadsheetId, quoteTab, getSpreadsheet, getValues, batchGetValues, spreadsheetUrl,
   batchUpdateValues, batchClearValues, insertRows, deleteRows, duplicateSheet,
@@ -10,15 +11,13 @@ import { createEditor } from './editor.js';
 import { isYearTab, parseYearTab, identifyPerson, toEur } from './budget.js';
 import { isoToBg } from './dates.js';
 import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.js';
-import { storage, SHEET_KEY, TAB_KEY } from './storage.js';
+import { storage, SHEET_KEY, TAB_KEY, PERIOD_KEY, ORDER_KEY, ENTRY_ORDER_KEY, clearViewState } from './storage.js';
 import { $, el, showError, setUpPage, withLoading, showSessionBanner } from './ui.js';
 import { icon, categoryIcon } from './icons.js';
 import { startSync, PAST_YEARS_MS } from './sync.js';
-import { PeriodPicker } from './period.js';
-import { DEFAULT_SPREADSHEET_URL, PEOPLE, BGN_PER_EUR, CATEGORIES, categoryStyle, badgeColours } from './config.js';
+import { PeriodPicker, monthPeriod, todayIso } from './period.js';
+import { DEFAULT_SPREADSHEET, PEOPLE, BGN_PER_EUR, CATEGORIES, categoryStyle, badgeColours } from './config.js';
 
-const ORDER_KEY = 'bs.order'; // Order of the month cards.
-const ENTRY_ORDER_KEY = 'bs.entryOrder'; // Order of the entries inside each card.
 const VIEWS = ['view-message', 'view-signin', 'view-pick', 'view-sheet'];
 
 // Replaced by the fixture in development (?fixture).
@@ -61,7 +60,7 @@ async function run(action, { overlay = true } = {}) {
         showSessionBanner(sync.renew);
       } else {
         $('user').hidden = true;
-        show('view-signin');
+        showSignIn(false);
       }
       return;
     }
@@ -94,14 +93,49 @@ async function start() {
     showMessage('No Google client ID is configured yet. Follow SETUP.md step 3, then put the Client ID into js/config.js.');
     return;
   }
+  let ended;
   try {
-    await initAuth();
+    ended = await initAuth();
   } catch (err) {
     showMessage(err.message);
     return;
   }
+  watchIdle(() => signedOut(true));
   if (getAccessToken()) await run(afterSignIn);
-  else show('view-signin');
+  else showSignIn(ended === 'idle');
+}
+
+function showSignIn(idle) {
+  $('signin-note').hidden = !idle;
+  $('signin-note').textContent = idle ? `Signed out after ${IDLE_MS / 60_000} minutes without use.` : '';
+  show('view-signin');
+}
+
+// After "Sign out" or IDLE_MS without use (auth.js has already forgotten the sign-in): back to the
+// sign-in card, with the page layout reset.
+function signedOut(idle) {
+  spreadsheet = null;
+  data = null;
+  me = null;
+  cache.clear();
+  sync?.pause();
+  editor?.closePopup();
+  document.querySelectorAll('dialog.modal').forEach((d) => d.remove());
+  picker?.reset(defaultPeriod());
+  showOrder();
+  $('user').hidden = true;
+  $('btn-add').hidden = true;
+  $('btn-reset').hidden = true;
+  showError(null);
+  showSignIn(idle);
+}
+
+// The spreadsheet to open: the one chosen in this browser, otherwise the default one (config.js).
+async function chosenSpreadsheet(email) {
+  const saved = storage.local.get(SHEET_KEY);
+  if (saved) return saved;
+  const packed = me && DEFAULT_SPREADSHEET[me.key];
+  return packed ? parseSpreadsheetId((await decryptFor(email, packed)) || '') : null;
 }
 
 async function afterSignIn() {
@@ -112,19 +146,29 @@ async function afterSignIn() {
   if (me) who.append(personName(me), el('span', 'email', ` · ${email}`));
   else who.textContent = email;
   $('user').hidden = false;
-  const id = storage.local.get(SHEET_KEY) || parseSpreadsheetId(DEFAULT_SPREADSHEET_URL);
+  const id = await chosenSpreadsheet(email);
   if (id) await openSpreadsheet(id);
   else showPicker();
 }
 
+// Asks for a spreadsheet URL; Cancel (only when one is open) goes back to it unchanged.
 function showPicker() {
   $('sheet-url').value = '';
+  $('btn-pick-cancel').hidden = !spreadsheet;
   show('view-pick');
+  $('btn-reset').hidden = true;
+  $('btn-add').hidden = true;
   $('sheet-url').focus();
 }
 
 async function openSpreadsheet(id) {
   const meta = await api.getSpreadsheet(id);
+  if (spreadsheet && spreadsheet.id !== id) {
+    // Another spreadsheet: nothing read from the old one applies.
+    cache.clear();
+    data = null;
+    storage.local.remove(TAB_KEY);
+  }
   spreadsheet = { id, meta };
   if (id !== 'fixture') storage.local.set(SHEET_KEY, id);
 
@@ -140,9 +184,15 @@ async function openSpreadsheet(id) {
   if (!picker) {
     picker = new PeriodPicker({
       years: () => yearTitles.map(Number),
-      onChange: (period) => run(() => load(period)),
+      period: savedPeriod() || defaultPeriod(),
+      onChange: (period) => {
+        storage.local.set(PERIOD_KEY, JSON.stringify(period));
+        run(() => load(period));
+      },
     });
     sync = startSync(syncNow, { offline: id === 'fixture' });
+  } else {
+    sync.resume();
   }
   editor ??= createEditor({
     api,
@@ -165,7 +215,30 @@ async function openSpreadsheet(id) {
   await load(picker.period);
   await loadCategories();
   $('btn-add').hidden = false;
+  $('btn-reset').hidden = false;
 }
+
+// ---- Page layout (period, order of months and entries): kept until signing out ----
+
+function defaultPeriod() {
+  return monthPeriod(todayIso());
+}
+
+function savedPeriod() {
+  try {
+    const p = JSON.parse(storage.local.get(PERIOD_KEY));
+    return p && /^\d{4}-\d\d-\d\d$/.test(p.from) && /^\d{4}-\d\d-\d\d$/.test(p.to) && p.kind && p.label ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+$('btn-reset').addEventListener('click', () => {
+  clearViewState();
+  showOrder();
+  picker?.set(defaultPeriod()); // Redraws (and the entry order with it).
+  storage.local.remove(PERIOD_KEY); // (So the default keeps following the current month.)
+});
 
 // Categories as in the sheet's dropdown (List!A2:A50); falls back to the ones the app knows.
 async function loadCategories() {
@@ -386,11 +459,20 @@ function renderTotals() {
     const tr = body.insertRow();
     tr.append(el('th', null, label), ...PEOPLE.map((p, i) => el('td', `person-${p.key}`, money(values[i], currency))));
   }
+  fitTotals();
   const mixed = new Set(data.years.map((y) => y.currency)).size > 1;
   const note = $('totals-note');
   note.textContent = `Carry-overs not counted.${mixed ? ` Leva converted at 1 € = ${BGN_PER_EUR} лв.` : ''}`;
   note.hidden = false;
 }
+
+// Fixed column sizes (CSS), unless a sum doesn't fit its column: then sizes follow the content.
+function fitTotals() {
+  const table = $('totals');
+  table.classList.remove('fit');
+  if ([...table.querySelectorAll('td')].some((td) => td.scrollWidth > td.clientWidth)) table.classList.add('fit');
+}
+window.addEventListener('resize', fitTotals); // (Turning the phone.)
 
 function renderProblems() {
   const several = data.years.length > 1;
@@ -743,12 +825,7 @@ $('btn-signin').addEventListener('click', () =>
 
 $('btn-signout').addEventListener('click', () => {
   signOut();
-  spreadsheet = null;
-  data = null;
-  me = null;
-  $('user').hidden = true;
-  showError(null);
-  show('view-signin');
+  signedOut(false);
 });
 
 $('form-pick').addEventListener('submit', (event) => {
@@ -761,12 +838,17 @@ $('form-pick').addEventListener('submit', (event) => {
   run(() => openSpreadsheet(id));
 });
 
+// The open spreadsheet stays until another one has been opened (Cancel goes back to it).
 $('btn-change').addEventListener('click', () => {
-  storage.local.remove(SHEET_KEY);
-  storage.local.remove(TAB_KEY);
-  data = null;
-  cache.clear();
+  showError(null);
   showPicker();
+});
+
+$('btn-pick-cancel').addEventListener('click', () => {
+  showError(null);
+  show('view-sheet');
+  $('btn-add').hidden = false;
+  $('btn-reset').hidden = false;
 });
 
 // Order of the month cards: a toggle between oldest first (like the sheet) and newest first.

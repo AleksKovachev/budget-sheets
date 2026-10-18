@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <!-- interactive-widget: the page gets smaller when the on-screen keyboard opens (instead of being covered). -->
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <!-- The app has its own light and dark themes: tells phone browsers not to darken it themselves. -->
+  <meta name="color-scheme" content="light dark">
   <title>Raw data – Budget Sheets</title>
   <script>
     // Apply the saved theme before anything is drawn (dark by default).
@@ -37,6 +39,7 @@
     </section>
 
     <section id="view-signin" class="card center" hidden>
+      <p id="signin-note" class="muted" hidden></p>
       <p>Sign in with a Google account that has access to the budget spreadsheet.</p>
       <button id="btn-signin" type="button" class="primary">Sign in with Google</button>
     </section>
@@ -58,7 +61,7 @@
           </select>
         </label>
         <button id="btn-focus" type="button" class="focus-button"></button>
-        <span id="hint" class="muted">Click a cell to edit it, a row number to insert or delete rows. Enter saves, Esc cancels. Locked: header rows and formulas.</span>
+        <span id="hint" class="muted">Click a cell to edit it. Row options (insert, copy, delete): click a row number, right-click a row, or press and hold it. Enter saves, Esc cancels. Locked: header rows and formulas.</span>
         <span id="status" class="muted"></span>
       </div>
       <div class="grid-wrap">

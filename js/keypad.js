@@ -1,15 +1,14 @@
 // Amounts: a small calculator. Fields accept sums like "12.40+3,60", "3×4.5" or "100/3"; on phones (and
 // narrow windows) the app shows its own keypad instead of the phone's keyboard.
 
-import { el } from './ui.js';
+import { el, touchInput } from './ui.js';
 
-// Phones and tablets get the keypad instead of the system keyboard; narrow windows show it too (handy
+// Used by finger (or pen), the app's keypad replaces the system keyboard; narrow windows show it too (handy
 // for testing), but there the computer's keyboard keeps working.
-const touchQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
 const narrowQuery = window.matchMedia('(max-width: 600px)');
-export const useKeypad = () => touchQuery.matches || narrowQuery.matches;
-// On touch screens the amount fields don't open the system keyboard at all (the keypad replaces it).
-export const keypadOnly = () => touchQuery.matches;
+export const useKeypad = () => touchInput() || narrowQuery.matches;
+// Used by finger, the amount fields don't open the system keyboard at all (the keypad replaces it).
+export const keypadOnly = () => touchInput();
 
 // '' -> null; a number or a sum with + − × ÷ (also - * / x and decimal commas) -> its value rounded to
 // cents; anything else -> NaN. A small parser, no eval().

@@ -9,7 +9,7 @@ import { quoteTab } from './sheets.js';
 import { parseYearTab, placeEntry, rowsToDelete, staysInPlace, moneyColumn } from './budget.js';
 import { cannotCreate, confirmCreate, createYearTab } from './yeartabs.js';
 import { isoToSerial, isoToBg, bgToIso } from './dates.js';
-import { el, columnLetter, placeFloating, openDialog, dialogButton, confirmDialog } from './ui.js';
+import { el, columnLetter, placeFloating, openDialog, dialogButton, confirmDialog, touchInput } from './ui.js';
 import { icon, categoryIcon } from './icons.js';
 import { openDatePopup, closeDatePopup, todayIso } from './calendar.js';
 import { PEOPLE, categoryStyle } from './config.js';
@@ -418,9 +418,26 @@ export function createEditor(ctx) {
     calendarButton.type = 'button';
     calendarButton.title = 'Pick a date';
     calendarButton.append(icon('calendar'));
+    // By finger, the field opens the calendar (with its own field for typing) instead of the keyboard.
+    const openCalendar = () => openDatePopup({
+      anchor: dateInput,
+      value: bgToIso(dateInput.value),
+      typed: touchInput(),
+      onPick: (iso) => {
+        dateInput.value = isoToBg(iso);
+        if (!touchInput()) dateInput.focus();
+      },
+    });
     calendarButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      openDatePopup({ anchor: dateInput, value: bgToIso(dateInput.value), onPick: (iso) => { dateInput.value = isoToBg(iso); dateInput.focus(); } });
+      openCalendar();
+    });
+    dateInput.addEventListener('pointerdown', () => { dateInput.readOnly = touchInput(); });
+    dateInput.addEventListener('click', (event) => {
+      if (!dateInput.readOnly) return;
+      event.stopPropagation();
+      dateInput.blur();
+      openCalendar();
     });
     const dateRow = el('div', 'input-with-icon');
     dateRow.append(dateInput, calendarButton);
@@ -525,7 +542,9 @@ export function createEditor(ctx) {
       error.textContent = message;
       return null;
     }
-    dateInput.focus();
+    // By finger nothing gets the focus, so no on-screen keyboard covers the dialog.
+    if (touchInput()) document.activeElement?.blur();
+    else dateInput.focus();
   }
 
   return { editEntry, insertEmpty, deleteEntry, openAddDialog, openEntryMenu, closePopup };
@@ -542,8 +561,13 @@ function formField(label, control) {
 function amountInput(value) {
   const input = el('input', 'amount-input');
   input.value = value;
-  // Touch screens: the app's keypad instead of the system keyboard; elsewhere numbers and + − × ÷ by keyboard.
+  // Used by finger: the app's keypad instead of the system keyboard; elsewhere numbers and + − × ÷ by keyboard.
+  // Decided again on every tap (before the field gets the focus), in case the input method changed.
   input.inputMode = keypadOnly() ? 'none' : 'decimal';
+  input.addEventListener('pointerdown', () => {
+    const hasKeypad = Boolean(input.closest('.modal-body, .amount-popup')?.querySelector('.keypad'));
+    input.inputMode = keypadOnly() && hasKeypad ? 'none' : 'decimal';
+  });
   input.placeholder = '0.00';
   input.autocomplete = 'off';
   input.title = 'An amount, or a calculation such as 12.40+3.60';
