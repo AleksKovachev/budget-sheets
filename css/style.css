@@ -126,6 +126,9 @@ svg.icon { width: 18px; height: 18px; flex: none; }
 }
 
 main { padding-top: 16px; padding-bottom: 72px; }
+/* The row buttons (+, ✕) reach a little past the cards; never let that widen the page.
+   (clip, not hidden: sticky headers keep working.) */
+main.wrap { overflow-x: clip; }
 
 .card {
   background: var(--surface);
@@ -328,6 +331,9 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
 }
 .month-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 10px 14px 4px; }
 .month-head h3 { margin: 0; font-size: 17px; }
+.month-title { display: flex; align-items: center; gap: 8px; }
+.card-add { padding: 3px; color: var(--accent); }
+.card-add svg.icon { width: 16px; height: 16px; }
 
 .entry {
   display: grid;
@@ -673,6 +679,56 @@ input.invalid { border-color: var(--personal); outline: 1px solid var(--personal
   box-shadow: var(--shadow);
 }
 .add-zone:hover, .add-zone:focus-visible { opacity: 1; }
+
+/* Red ✕ on the right edge of the row under the mouse: deletes the entry (after asking). */
+.delete-x {
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--personal) !important;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  z-index: 3;
+  transition: opacity 0.12s;
+}
+.delete-x svg.icon { width: 14px; height: 14px; }
+.entries .entry:hover .delete-x, .delete-x:focus-visible { opacity: 1; }
+.delete-x:active { filter: brightness(0.85); }
+@media (hover: none) {
+  .delete-x { display: none; } /* Phones: press and hold an entry → Delete entry. */
+}
+
+/* Calculator keypad for amounts (phones and narrow windows). */
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+.keypad .key {
+  height: 46px;
+  padding: 0;
+  font-size: 20px;
+  font-weight: 600;
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.keypad .key.op { color: var(--accent); font-size: 22px; }
+.keypad .key.clear { grid-column: span 2; color: var(--personal); font-size: 16px; }
+.keypad .key.equals { grid-column: span 2; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.amount-result { font-size: 13px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; min-height: 0; }
+.amount-result:not(:empty) { margin-top: 4px; }
+.amount-popup .keypad { margin-top: 8px; }
 .add-zone:active svg.icon { filter: brightness(0.9); }
 @media (hover: none) {
   .add-zone { display: none; }

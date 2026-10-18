@@ -132,15 +132,16 @@ async function open() {
   sync ??= startSync(syncNow, { interval: () => (tab === yearTitles[0] ? SYNC_INTERVAL_MS : PAST_YEARS_MS), offline: fixture });
 }
 
-// The year dropdown: only the year tabs (the others are edited in Google Sheets), plus "New…".
+// The year dropdown: "New…" at the top (it adds the next year), a separator line, then the year tabs,
+// newest first (the other tabs are edited in Google Sheets).
 const NEW_YEAR = '__new';
 function fillYears() {
   yearTitles = meta.sheets.map((s) => s.properties.title).filter(isYearTab).sort((a, b) => b.localeCompare(a));
   const select = $('tab-select');
   const create = el('option', null, 'New…');
   create.value = NEW_YEAR;
-  select.replaceChildren(...yearTitles.map((t) => el('option', null, t)), create);
-  if (tab && yearTitles.includes(tab)) select.value = tab;
+  select.replaceChildren(create, el('hr'), ...yearTitles.map((t) => el('option', null, t)));
+  select.value = tab && yearTitles.includes(tab) ? tab : yearTitles[0];
 }
 
 // Re-reads the tab list (tabs can be added or deleted in Google Sheets). Returns true if it changed;

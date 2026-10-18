@@ -13,6 +13,7 @@ import { el, columnLetter, placeFloating, openDialog, dialogButton, confirmDialo
 import { icon, categoryIcon } from './icons.js';
 import { openDatePopup, closeDatePopup, todayIso } from './calendar.js';
 import { PEOPLE, categoryStyle } from './config.js';
+import { evaluateAmount, createKeypad, createResultLine, useKeypad, keypadOnly } from './keypad.js';
 
 const INPUT_COLUMNS = 9; // A..I
 const DATE_COLUMN = 0;
@@ -172,22 +173,31 @@ export function createEditor(ctx) {
     });
   }
 
-  // Entry menu (right-click, or press and hold on a phone).
-  function openEntryMenu(anchor, year, entry) {
+  // Entry menu (right-click, or press and hold on a phone). gaps: { above, below } -> { row, date } for
+  // inserting an empty record on that side of the entry as it is shown.
+  function openEntryMenu(anchor, year, entry, gaps) {
     if (entry.kind === 'carry') return;
     const menu = el('div', 'menu');
     menu.setAttribute('role', 'menu');
     menu.append(el('div', 'menu-title', [entry.date ? isoToBg(entry.date) : '', entry.description || entry.category].filter(Boolean).join(' · ')));
-    const remove = el('button', 'menu-item danger');
-    remove.type = 'button';
-    remove.append(icon('trash'), el('span', null, 'Delete entry'));
-    remove.addEventListener('click', () => {
-      closePopup();
-      deleteEntry(year, entry);
-    });
-    menu.append(remove);
+    const item = (label, iconName, className, action) => {
+      const button = el('button', `menu-item ${className}`.trim());
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.append(icon(iconName), el('span', null, label));
+      button.addEventListener('click', () => {
+        closePopup();
+        action();
+      });
+      menu.append(button);
+      return button;
+    };
+    const first = item('Insert empty record above', 'rowAbove', '', () => insertEmpty(year, gaps.above.row, gaps.above.date));
+    item('Insert empty record below', 'rowBelow', '', () => insertEmpty(year, gaps.below.row, gaps.below.date));
+    menu.append(el('div', 'menu-sep'));
+    item('Delete entry', 'trash', 'danger', () => deleteEntry(year, entry));
     showPopup(menu, anchor);
-    remove.focus();
+    first.focus();
   }
 
   async function setCells(year, entry, cells) {
@@ -321,7 +331,8 @@ export function createEditor(ctx) {
     };
     const buttons = el('div', 'popup-buttons');
     buttons.append(dialogButton('Cancel', null, closePopup), dialogButton('Save', 'primary', save));
-    panel.append(tabs.node, fields, error, buttons);
+    const result = createResultLine(panel);
+    panel.append(tabs.node, fields, result, ...(useKeypad() ? [createKeypad(panel)] : []), error, buttons);
     drawFields(); // Before placing, so the popup's full height is known.
     showPopup(panel, anchor);
     inputs.paid.focus();
@@ -391,7 +402,8 @@ export function createEditor(ctx) {
 
   // ---- Add record dialog ----
 
-  function openAddDialog() {
+  // date: ISO date to start with (default today), e.g. from a month card's "+".
+  function openAddDialog({ date = todayIso() } = {}) {
     const me = ctx.me() || PEOPLE[0];
     let person = me.key;
     let category = '';
@@ -399,7 +411,7 @@ export function createEditor(ctx) {
 
     // Date: text (dd.mm.yyyy and short forms) + calendar.
     const dateInput = el('input');
-    dateInput.value = isoToBg(todayIso());
+    dateInput.value = isoToBg(date);
     dateInput.placeholder = 'dd.mm.yyyy';
     dateInput.inputMode = 'numeric';
     const calendarButton = el('button', 'icon-button field-icon');
@@ -446,13 +458,21 @@ export function createEditor(ctx) {
 
     const error = el('div', 'form-error');
     error.setAttribute('role', 'alert');
+    // Keypad (phones): shown while an amount field has the focus.
+    const pad = useKeypad() ? createKeypad(body) : null;
+    if (pad) {
+      pad.hidden = true;
+      body.addEventListener('focusin', (event) => { pad.hidden = !event.target.classList.contains('amount-input'); });
+    }
     body.append(
       formField('Date', dateRow),
       formField('Category', categoryButton),
       formField('Description', description),
       formField('Who', tabs.node),
       amountFields,
-      el('p', 'muted form-hint', 'Paid: shared 50/50 · Personal: the part of "Paid" that was only for this person · Cash in: money given to the other person.'),
+      createResultLine(body),
+      ...(pad ? [pad] : []),
+      el('p', 'muted form-hint', 'Paid: shared 50/50 · Personal: the part of "Paid" that was only for this person · Cash in: money given to the other person. Amounts can be calculations, e.g. 12.40+3.60.'),
       error,
     );
 
@@ -508,7 +528,7 @@ export function createEditor(ctx) {
     dateInput.focus();
   }
 
-  return { editEntry, insertEmpty, openAddDialog, openEntryMenu, closePopup };
+  return { editEntry, insertEmpty, deleteEntry, openAddDialog, openEntryMenu, closePopup };
 }
 
 // ---- Small builders ----
@@ -522,19 +542,16 @@ function formField(label, control) {
 function amountInput(value) {
   const input = el('input', 'amount-input');
   input.value = value;
-  input.inputMode = 'decimal';
+  // Touch screens: the app's keypad instead of the system keyboard; elsewhere numbers and + − × ÷ by keyboard.
+  input.inputMode = keypadOnly() ? 'none' : 'decimal';
   input.placeholder = '0.00';
   input.autocomplete = 'off';
+  input.title = 'An amount, or a calculation such as 12.40+3.60';
   return input;
 }
 
-// '' -> null; '12,50' / '12.50' -> 12.5; anything else -> NaN.
-function parseAmount(text) {
-  const t = String(text).trim().replace(/\s/g, '').replace(',', '.');
-  if (t === '') return null;
-  if (!/^-?\d+(\.\d+)?$/.test(t)) return NaN;
-  return Number(t);
-}
+// '' -> null; a number or a calculation -> its value; anything else -> NaN (keypad.js).
+const parseAmount = evaluateAmount;
 
 // Person switch (Aleks | Iliyana) in each person's colour.
 function personTabs(selected, onChange) {

@@ -427,12 +427,24 @@ function renderMonths() {
   markClippedDescriptions();
 }
 
-function card(className, title, meta) {
+// addDate (optional): shows a "+" in the header that opens Add record with that date.
+function card(className, title, meta, addDate) {
   const section = el('section', className);
   const sticky = el('div', 'month-sticky');
   const inner = el('div', 'month-sticky-inner');
   const head = el('div', 'month-head');
-  head.append(el('h3', null, title), el('span', 'muted', meta));
+  const heading = el('div', 'month-title');
+  heading.append(el('h3', null, title));
+  if (addDate) {
+    const add = el('button', 'icon-button card-add');
+    add.type = 'button';
+    add.title = `Add a record to ${title}`;
+    add.setAttribute('aria-label', add.title);
+    add.append(icon('plus'));
+    add.addEventListener('click', () => editor?.openAddDialog({ date: addDate }));
+    heading.append(add);
+  }
+  head.append(heading, el('span', 'muted', meta));
   inner.append(head, columnHeader());
   sticky.append(inner);
   const list = el('div', 'entries');
@@ -469,32 +481,48 @@ function monthCard({ year, block, entries }) {
   const shared = entries.reduce((sum, e) => sum + PEOPLE.reduce((s, p) => s + e.money[p.key].paid - e.money[p.key].personal, 0), 0);
   const partial = entries.length < block.entries.length ? ` of ${block.entries.length}` : '';
   const meta = `${entries.length}${partial} entries · shared ${money(shared, year.currency)}`;
-  const { section, list } = card('month', monthName(block.month), meta);
+  // "+" in the header: Add record, dated today if today is in this month, else the month's last entry.
+  const lastDate = block.entries.at(-1)?.date;
+  const today = new Date();
+  const todayMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const addDate = todayMonth === block.month
+    ? `${todayMonth}-${String(today.getDate()).padStart(2, '0')}`
+    : lastDate || `${block.month}-01`;
+  const { section, list } = card('month', monthName(block.month), meta, addDate);
   const newest = newestEntriesFirst();
   const ordered = newest ? [...entries].reverse() : entries;
   const n = entries.length;
   ordered.forEach((entry, j) => {
     const row = entryRow(entry, year);
+    // Gaps (in sheet order) above and below the row as shown: with newest first the order is reversed.
+    const above = newest ? n - j : j;
+    const below = newest ? n - j - 1 : j + 1;
+    rowInfo.get(row).gaps = { above: gapInsert(block, entries, above), below: gapInsert(block, entries, below) };
     // "+" at the row's top-left corner: inserts an empty entry between it and the row above.
-    row.append(addZone(year, block, entries, newest ? n - j : j, 'top'));
-    if (j === n - 1) row.append(addZone(year, block, entries, newest ? 0 : n, 'bottom'));
+    row.append(addZone(year, block, entries, above, 'top'));
+    if (j === n - 1) row.append(addZone(year, block, entries, below, 'bottom'));
     list.append(row);
   });
   return section;
 }
 
-// "+" for the gap before entries[g] in sheet order (g = n: after the last). The new entry gets the date
-// of the entry above it in the sheet (or of the first one), so it lands in the same place when sorted.
-function addZone(year, block, entries, g, edge) {
+// Where to insert an empty entry for the gap before entries[g] in sheet order (g = n: after the last).
+// It gets the date of the entry above it in the sheet (or of the first one), so it stays in place when sorted.
+function gapInsert(block, entries, g) {
   const n = entries.length;
-  const row = g < n ? entries[g].rowNumber : entries[n - 1].rowNumber + 1;
-  const date = (g > 0 ? entries[g - 1].date : entries[0].date) || `${block.month}-01`;
+  return {
+    row: g < n ? entries[g].rowNumber : entries[n - 1].rowNumber + 1,
+    date: (g > 0 ? entries[g - 1].date : entries[0].date) || `${block.month}-01`,
+  };
+}
+
+function addZone(year, block, entries, g, edge) {
   const button = el('button', `add-zone ${edge}`);
   button.type = 'button';
   button.title = 'Insert an empty entry here';
   button.setAttribute('aria-label', 'Insert an empty entry here');
   button.append(icon('plus'));
-  zoneInfo.set(button, { year, row, date });
+  zoneInfo.set(button, { year, ...gapInsert(block, entries, g) });
   return button;
 }
 
@@ -566,6 +594,15 @@ function entryRow(entry, year) {
   }
 
   row.append(dateCell(entry), what, amounts);
+  // Red ✕ on the right edge (computers, on hover): deletes the entry after asking.
+  if (entry.kind !== 'carry') {
+    const remove = el('button', 'delete-x');
+    remove.type = 'button';
+    remove.title = 'Delete this entry';
+    remove.setAttribute('aria-label', 'Delete this entry');
+    remove.append(icon('close'));
+    row.append(remove);
+  }
   return row;
 }
 
@@ -619,6 +656,13 @@ $('months').addEventListener('click', (event) => {
   }
   if (!editor) return;
   // "+" between rows: insert an empty entry.
+  const removeButton = event.target.closest('.delete-x');
+  if (removeButton) {
+    event.stopPropagation();
+    const { year, entry } = rowInfo.get(removeButton.closest('.entry'));
+    editor.deleteEntry(year, entry);
+    return;
+  }
   const zone = event.target.closest('.add-zone');
   if (zone) {
     event.stopPropagation();
@@ -644,7 +688,7 @@ function openMenuFor(rowElement) {
   if (!editor || !info || info.entry.kind === 'carry') return false;
   if (Date.now() - lastMenuAt < 800) return true; // Long press and the browser's own context menu event.
   lastMenuAt = Date.now();
-  editor.openEntryMenu(rowElement.querySelector('.what') || rowElement, info.year, info.entry);
+  editor.openEntryMenu(rowElement.querySelector('.what') || rowElement, info.year, info.entry, info.gaps);
   return true;
 }
 $('months').addEventListener('contextmenu', (event) => {
