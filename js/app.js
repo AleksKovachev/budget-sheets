@@ -145,8 +145,11 @@ async function chosenSpreadsheet(email) {
   return packed ? parseSpreadsheetId((await decryptFor(email, packed)) || '') : null;
 }
 
+let signedInEmail = null;
+
 async function afterSignIn() {
   const email = await fetchUserEmail();
+  signedInEmail = email;
   me = await identifyPerson(email);
   // Only the person's name in the top bar (the email address isn't shown).
   const who = $('user-email');
@@ -198,7 +201,13 @@ async function openSpreadsheet(id) {
         run(() => load(period));
       },
     });
-    sync = startSync(syncNow, { offline: id === 'fixture' });
+    sync = startSync(syncNow, {
+      offline: id === 'fixture',
+      // Another account chosen in Google's popup when renewing: show its person (and spreadsheet).
+      renewed: async () => {
+        if ((await fetchUserEmail()) !== signedInEmail) await run(afterSignIn);
+      },
+    });
   } else {
     sync.resume();
   }

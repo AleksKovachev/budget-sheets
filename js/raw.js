@@ -578,6 +578,10 @@ function placePopup(node, anchor) {
 document.addEventListener('pointerdown', () => {
   if (popup) closePopups();
 });
+// They're placed on the page, not in the table: when the table scrolls, they'd end up next to other rows.
+document.querySelector('.grid-wrap').addEventListener('scroll', () => {
+  if (popup) closePopups();
+}, { passive: true });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && popup) closePopups();
 });

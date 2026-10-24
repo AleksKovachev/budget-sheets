@@ -188,9 +188,17 @@ export function watchIdle(onSignedOut) {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') check();
   }, true);
-  // Signing in or out on another page of the app (another tab) applies here too.
+  // Signing in or out on another page of the app (another tab) applies here too. A sign-out there (button
+  // or IDLE_MS) shows the sign-in card here as well; a sign-in that merely ran out (dropToken, which leaves
+  // ENDED_KEY) shows the "sign in again" bar as usual.
   window.addEventListener('storage', (event) => {
-    if (event.key === TOKEN_KEY) token = readSavedToken();
+    if (event.key !== TOKEN_KEY) return;
+    const had = Boolean(token);
+    token = readSavedToken();
+    if (had && !token && event.newValue === null && !storage.local.get(ENDED_KEY)) {
+      signOut();
+      onSignedOut(idleFor() > IDLE_MS);
+    }
   });
   if (token) markActive(true);
 }

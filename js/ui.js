@@ -287,8 +287,21 @@ export function setUpUndo({ labels, step, ready }) {
       button.setAttribute('aria-label', button.title);
     }
   };
+  // Pressed while the page is busy (a sync or save running): the step waits its turn (up to 5 seconds)
+  // instead of being ignored. Several presses run one after another.
+  const waiting = [];
+  let timer = 0;
   const run = (back) => {
-    if (ready()) step(back);
+    waiting.push({ back, until: Date.now() + 5000 });
+    if (timer) return;
+    timer = setInterval(() => {
+      while (waiting.length && waiting[0].until < Date.now()) waiting.shift();
+      if (waiting.length && ready()) step(waiting.shift().back);
+      if (!waiting.length) {
+        clearInterval(timer);
+        timer = 0;
+      }
+    }, 100);
   };
   buttons.undo.addEventListener('click', () => run(true));
   buttons.redo.addEventListener('click', () => run(false));

@@ -149,7 +149,8 @@ export function createEditor(ctx) {
         return;
       }
       if (!(await ensureYearTab(target))) return;
-      const extra = (fresh[entry.rowNumber - 1] || []).slice(INPUT_COLUMNS).some((v) => v !== '' && v !== null);
+      // (Read with formulas: a formula after column I counts even while it shows nothing.)
+      const extra = before.slice(INPUT_COLUMNS).some((v) => v !== '');
       if (extra && !(await confirmDialog({
         title: 'Move this entry?',
         message: `Row ${entry.rowNumber} also has something to the right of the entry (after column I). The new date moves the entry to another row; that extra content is removed with the old row.`,
@@ -184,13 +185,14 @@ export function createEditor(ctx) {
     if (!(await confirmDialog({ title: 'Delete this entry?', message: [what || '(empty entry)', 'Its row will be removed from Google Sheets.'], confirm: 'Delete' }))) return;
     await change([year.title], async () => {
       const fresh = await checkUnchanged(year, entry.rowNumber);
-      const extra = (fresh[entry.rowNumber - 1] || []).slice(INPUT_COLUMNS).some((v) => v !== '' && v !== null);
+      const [aboveRow, whole] = await snapshot(year.title, entry.rowNumber - 1, entry.rowNumber);
+      // (Read with formulas: a formula after column I counts even while it shows nothing.)
+      const extra = whole.slice(INPUT_COLUMNS).some((v) => v !== '');
       if (extra && !(await confirmDialog({
         title: 'Delete the whole row?',
         message: `Row ${entry.rowNumber} also has something to the right of the entry (after column I); it is deleted with the row.`,
         confirm: 'Delete',
       }))) return;
-      const [aboveRow, whole] = await snapshot(year.title, entry.rowNumber - 1, entry.rowNumber);
       const removal = rowsToDelete(parseYearTab(year.title, fresh), entry.rowNumber);
       await ctx.api.deleteRows(id(), sheetIdOf(year.title), removal.start - 1, removal.count);
       record('Delete record', {

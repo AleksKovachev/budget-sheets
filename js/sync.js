@@ -17,7 +17,8 @@ const RENEW_WARNING_S = 5 * 60;
 // run() does one sync (it throws on failure; a 401 means signed out). It may return false to mean
 // "skipped, try again soon" (e.g. while saving). interval() gives the current wait between syncs.
 // offline: true for the development fixture, which needs no sign-in.
-export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = false } = {}) {
+// renewed() (optional) runs after the sign-in was renewed, e.g. to check which account came back.
+export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = false, renewed } = {}) {
   const button = $('btn-sync');
   const ring = createRing();
   const label = el('span', 'sync-seconds');
@@ -33,6 +34,7 @@ export function startSync(run, { interval = () => SYNC_INTERVAL_MS, offline = fa
 
   async function renew() {
     await signIn();
+    await renewed?.();
     hideSessionBanner();
     lastError = null;
     await syncNow();
