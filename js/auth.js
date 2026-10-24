@@ -155,16 +155,25 @@ export function stayActive() {
   markActive(true);
 }
 
-// Watches for use of the page; onIdle() runs once the app (all its open pages together) has not been used
-// for IDLE_MS while signed in. The sign-in is already gone by then.
-export function watchIdle(onIdle) {
+// "Sign out" from the warning before the idle sign-out: the page shows its sign-in card (watchIdle).
+export function signOutNow() {
+  signOut();
+  signedOutHandler?.(false);
+}
+
+let signedOutHandler = null;
+
+// Watches for use of the page; onSignedOut(true) runs once the app (all its open pages together) has not
+// been used for IDLE_MS while signed in, onSignedOut(false) after signOutNow(). The sign-in is already gone.
+export function watchIdle(onSignedOut) {
+  signedOutHandler = onSignedOut;
   for (const type of ['pointerdown', 'keydown', 'wheel', 'scroll']) {
     window.addEventListener(type, () => markActive(), { capture: true, passive: true });
   }
   const check = () => {
     if (token && idleFor() > IDLE_MS) {
       signOut();
-      onIdle();
+      onSignedOut(true);
     }
   };
   setInterval(check, 1000);

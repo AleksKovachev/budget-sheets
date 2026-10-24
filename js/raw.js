@@ -119,12 +119,12 @@ async function start() {
     showMessage('No spreadsheet has been chosen yet. Open the main page (Budget Sheets, top left) first.');
     return;
   }
-  watchIdle(() => {
+  watchIdle((idle) => {
     closePopups();
     if (editing) cancelEdit();
     sync?.pause();
     showError(null);
-    showSignIn(true);
+    showSignIn(idle);
   });
   if (getAccessToken()) await run(open);
   else showSignIn(ended === 'idle');

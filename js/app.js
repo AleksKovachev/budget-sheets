@@ -77,6 +77,7 @@ async function run(action, { overlay = true } = {}) {
 
 async function start() {
   setUpPage();
+  setUpSummary();
   showOrder();
 
   if (fixtureRequested()) {
@@ -100,7 +101,7 @@ async function start() {
     showMessage(err.message);
     return;
   }
-  watchIdle(() => signedOut(true));
+  watchIdle((idle) => signedOut(idle));
   if (getAccessToken()) await run(afterSignIn);
   else showSignIn(ended === 'idle');
 }
@@ -123,11 +124,16 @@ function signedOut(idle) {
   document.querySelectorAll('dialog.modal').forEach((d) => d.remove());
   picker?.reset(defaultPeriod());
   showOrder();
+  editor?.clearHistory();
   $('user').hidden = true;
-  $('btn-add').hidden = true;
-  $('btn-reset').hidden = true;
+  showSheetControls(false);
   showError(null);
   showSignIn(idle);
+}
+
+// Buttons that belong to an open spreadsheet: Add record, undo / redo, reset layout.
+function showSheetControls(on) {
+  for (const id of ['btn-add', 'btn-undo', 'btn-redo', 'btn-reset']) $(id).hidden = !on;
 }
 
 // The spreadsheet to open: the one chosen in this browser, otherwise the default one (config.js).
@@ -157,8 +163,7 @@ function showPicker() {
   $('sheet-url').value = '';
   $('btn-pick-cancel').hidden = !spreadsheet;
   show('view-pick');
-  $('btn-reset').hidden = true;
-  $('btn-add').hidden = true;
+  showSheetControls(false);
   $('sheet-url').focus();
 }
 
@@ -169,6 +174,7 @@ async function openSpreadsheet(id) {
     cache.clear();
     data = null;
     storage.local.remove(TAB_KEY);
+    editor?.clearHistory();
   }
   spreadsheet = { id, meta };
   if (id !== 'fixture') storage.local.set(SHEET_KEY, id);
@@ -212,12 +218,44 @@ async function openSpreadsheet(id) {
       $('error').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     },
     notice: (text) => { $('notice').textContent = text; },
+    historyChanged: updateHistoryButtons,
   });
   await load(picker.period);
   await loadCategories();
-  $('btn-add').hidden = false;
-  $('btn-reset').hidden = false;
+  showSheetControls(true);
+  updateHistoryButtons();
 }
+
+// ---- Undo / redo (editor.js): arrows in the top bar, Ctrl+Z and Ctrl+Y / Ctrl+Shift+Z ----
+
+function updateHistoryButtons() {
+  const { undo, redo } = editor?.history() ?? {};
+  for (const [id, label, keys, what] of [['btn-undo', 'Undo', 'Ctrl+Z', undo], ['btn-redo', 'Redo', 'Ctrl+Y', redo]]) {
+    const button = $(id);
+    button.disabled = !what;
+    button.title = what ? `${label}: ${what} (${keys})` : `Nothing to ${label.toLowerCase()} (${keys})`;
+    button.setAttribute('aria-label', button.title);
+  }
+}
+
+const historyStep = (back) => {
+  if (!editor || loading || !data) return;
+  editor.closePopup();
+  if (back) editor.undo();
+  else editor.redo();
+};
+$('btn-undo').addEventListener('click', () => historyStep(true));
+$('btn-redo').addEventListener('click', () => historyStep(false));
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const key = event.key.toLowerCase();
+  if (key !== 'z' && key !== 'y') return;
+  // Typing fields keep their own undo; nothing happens while a dialog is open.
+  if (event.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
+  if ($('view-sheet').hidden) return;
+  event.preventDefault();
+  historyStep(key === 'z' && !event.shiftKey);
+});
 
 // ---- Page layout (period, order of months and entries): kept until signing out ----
 
@@ -467,6 +505,55 @@ function renderTotals() {
   note.hidden = false;
 }
 
+// ---- Balance card: pinned under the top bar (default), and a switch for the totals table ----
+
+const BALANCE_PIN_KEY = 'bs.balancePinned';
+const TOTALS_KEY = 'bs.totals'; // 'shown' | 'hidden'; default: hidden on phones, shown elsewhere.
+
+function setUpSummary() {
+  const summary = $('summary');
+  const pin = $('btn-balance-pin');
+  const totals = $('btn-totals');
+  // Month headers stick just below the pinned cards.
+  const updateOffset = () => {
+    const height = summary.classList.contains('pinned') ? summary.offsetHeight : 0;
+    document.documentElement.style.setProperty('--summary-h', `${height}px`);
+  };
+  new ResizeObserver(updateOffset).observe(summary);
+  const applyPin = (pinned) => {
+    summary.classList.toggle('pinned', pinned);
+    pin.replaceChildren(icon(pinned ? 'pin' : 'pinOff'));
+    pin.classList.toggle('active', pinned);
+    pin.title = pinned ? 'The balance stays visible. Click to let it scroll away.' : 'Click to keep the balance visible.';
+    pin.setAttribute('aria-label', pin.title);
+    pin.setAttribute('aria-pressed', String(pinned));
+    updateOffset();
+  };
+  pin.addEventListener('click', () => {
+    const pinned = !summary.classList.contains('pinned');
+    storage.local.set(BALANCE_PIN_KEY, pinned ? '1' : '0');
+    applyPin(pinned);
+  });
+  applyPin(storage.local.get(BALANCE_PIN_KEY) !== '0');
+
+  const applyTotals = (shown) => {
+    summary.classList.toggle('totals-hidden', !shown);
+    totals.replaceChildren(icon('table'));
+    totals.classList.toggle('active', shown);
+    totals.title = `${shown ? 'Hide' : 'Show'} the totals (shared paid, half, cash in)`;
+    totals.setAttribute('aria-label', totals.title);
+    totals.setAttribute('aria-pressed', String(shown));
+    if (shown) fitTotals();
+  };
+  totals.addEventListener('click', () => {
+    const shown = summary.classList.contains('totals-hidden');
+    storage.local.set(TOTALS_KEY, shown ? 'shown' : 'hidden');
+    applyTotals(shown);
+  });
+  const saved = storage.local.get(TOTALS_KEY);
+  applyTotals(saved ? saved === 'shown' : !window.matchMedia('(max-width: 600px)').matches);
+}
+
 // Fixed column sizes (CSS), unless a sum doesn't fit its column: then sizes follow the content.
 function fitTotals() {
   const table = $('totals');
@@ -497,6 +584,8 @@ function renderProblems() {
 
 function renderMonths() {
   hidePopover();
+  openSwipe = null; // (Its row is replaced.)
+  swipe = null;
   const cards = [];
   for (const year of data.years) {
     // The carry-over belongs before January, when the period includes 1 January.
@@ -531,8 +620,21 @@ function card(className, title, meta, addDate) {
   inner.append(head, columnHeader());
   sticky.append(inner);
   const list = el('div', 'entries');
-  section.append(sticky, list);
+  // The header sticks within .month-body only, which holds every row but the last (finishCard): once
+  // the last row reaches the header, both scroll away together, so no sliver of a row stays under it.
+  const body = el('div', 'month-body');
+  body.append(sticky, list);
+  section.append(body, el('div', 'entries entries-tail'));
   return { section, list };
+}
+
+// After the rows are in: alternate row colours, and the last row moves below .month-body (see card).
+function finishCard(section) {
+  const list = section.querySelector('.month-body .entries');
+  const rows = [...list.children];
+  rows.forEach((row, i) => row.classList.toggle('alt', i % 2 === 1));
+  if (rows.length) section.querySelector('.entries-tail').append(rows.at(-1));
+  return section;
 }
 
 function columnHeader() {
@@ -586,7 +688,7 @@ function monthCard({ year, block, entries }) {
     if (j === n - 1) row.append(addZone(year, block, entries, below, 'bottom'));
     list.append(row);
   });
-  return section;
+  return finishCard(section);
 }
 
 // Where to insert an empty entry for the gap before entries[g] in sheet order (g = n: after the last).
@@ -612,7 +714,7 @@ function addZone(year, block, entries, g, edge) {
 function carryCard(year) {
   const { section, list } = card('month carry-card', `Carried over from ${year.year - 1}`, 'Balance at the end of last year');
   list.append(entryRow(year.carry, year));
-  return section;
+  return finishCard(section);
 }
 
 function dateCell(entry) {
@@ -795,12 +897,132 @@ $('months').addEventListener('pointermove', (event) => {
 });
 for (const type of ['pointerup', 'pointercancel']) $('months').addEventListener(type, () => clearTimeout(pressTimer));
 let suppressNextClick = false;
-// The click that ends a long press must not also start editing.
+// The click that ends a long press or a swipe must not also start editing. (A new press starts afresh:
+// browsers don't always send that click.)
+$('months').addEventListener('pointerdown', () => { suppressNextClick = false; }, true);
 $('months').addEventListener('click', (event) => {
   if (!suppressNextClick) return;
   suppressNextClick = false;
   event.stopImmediatePropagation();
 }, true);
+
+// ---- Swiping a row (finger or mouse): to the right it shows "Insert an empty record above / below",
+// to the left "Delete record". The row stays open on its buttons until one is pressed or anything else is.
+
+const SWIPE_OPEN = { left: 112, right: 64 }; // How far the row stays moved while that side's buttons show.
+let swipe = null; // The drag in progress: { row, startX, startY, base, active, layer }
+let openSwipe = null; // The row resting open: { row, layer, offset }
+
+// The buttons behind a row (inside its .entries list, which is positioned).
+function swipeLayer(row) {
+  const { year, entry, gaps } = rowInfo.get(row);
+  const layer = el('div', 'swipe-actions');
+  layer.style.top = `${row.offsetTop}px`;
+  layer.style.height = `${row.offsetHeight}px`;
+  const button = (className, iconName, label, action) => {
+    const b = el('button', `swipe-btn ${className}`);
+    b.type = 'button';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.append(icon(iconName));
+    b.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeSwipe(false);
+      action();
+    });
+    return b;
+  };
+  const left = el('div', 'swipe-side left');
+  left.append(
+    button('add', 'rowAbove', 'Insert an empty record above', () => editor.insertEmpty(year, gaps.above.row, gaps.above.date)),
+    button('add', 'rowBelow', 'Insert an empty record below', () => editor.insertEmpty(year, gaps.below.row, gaps.below.date)),
+  );
+  const right = el('div', 'swipe-side right');
+  right.append(button('delete', 'trash', 'Delete record', () => editor.deleteEntry(year, entry)));
+  layer.append(left, right);
+  row.parentElement.append(layer);
+  return layer;
+}
+
+function moveRow(row, layer, offset) {
+  row.style.transform = offset ? `translateX(${offset}px)` : '';
+  layer.dataset.show = offset > 0 ? 'left' : 'right';
+}
+
+function closeSwipe(animate = true) {
+  if (!openSwipe) return;
+  const { row, layer } = openSwipe;
+  openSwipe = null;
+  row.style.transition = animate ? 'transform 0.18s ease' : '';
+  row.style.transform = '';
+  setTimeout(() => {
+    if (openSwipe?.row === row) return; // Opened again meanwhile.
+    layer.remove();
+    row.classList.remove('swiping');
+    row.style.transition = '';
+  }, animate ? 180 : 0);
+}
+
+$('months').addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || !editor) return;
+  const row = event.target.closest('.entries .entry.editable');
+  const onButton = event.target.closest('button, input, .swipe-actions');
+  if (openSwipe && !event.target.closest('.swipe-actions')) {
+    // Any press elsewhere closes the open row (and does nothing else).
+    if (openSwipe.row !== row || !onButton) suppressNextClick = true;
+    if (openSwipe.row !== row) closeSwipe();
+  }
+  if (!row || onButton) return;
+  const base = openSwipe?.row === row ? openSwipe.offset : 0;
+  swipe = { row, startX: event.clientX, startY: event.clientY, base, active: false, layer: openSwipe?.row === row ? openSwipe.layer : null };
+});
+$('months').addEventListener('pointermove', (event) => {
+  if (!swipe) return;
+  const dx = event.clientX - swipe.startX;
+  const dy = event.clientY - swipe.startY;
+  if (!swipe.active) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; } // Scrolling.
+    if (Math.abs(dx) < 10) return;
+    swipe.active = true;
+    clearTimeout(pressTimer);
+    window.getSelection()?.removeAllRanges();
+    swipe.layer ??= swipeLayer(swipe.row);
+    // The row keeps getting the moves even when the finger or mouse leaves it.
+    try { swipe.row.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+    swipe.row.classList.add('swiping');
+    swipe.row.style.transition = '';
+    if (openSwipe?.row === swipe.row) openSwipe = null;
+  }
+  // Past the buttons' width the row follows the finger only a little.
+  let offset = swipe.base + dx;
+  const max = offset > 0 ? SWIPE_OPEN.left : SWIPE_OPEN.right;
+  if (Math.abs(offset) > max) offset = Math.sign(offset) * (max + (Math.abs(offset) - max) * 0.3);
+  swipe.offset = offset;
+  moveRow(swipe.row, swipe.layer, offset);
+});
+for (const type of ['pointerup', 'pointercancel']) {
+  $('months').addEventListener(type, (event) => {
+    if (!swipe) return;
+    const { row, layer, active, offset = 0 } = swipe;
+    swipe = null;
+    if (!active) {
+      if (event.type === 'pointerup' && openSwipe?.row === row) closeSwipe(); // A tap on the open row.
+      return;
+    }
+    suppressNextClick = true;
+    row.style.transition = 'transform 0.18s ease';
+    const side = offset > 0 ? 'left' : 'right';
+    if (event.type === 'pointerup' && Math.abs(offset) > SWIPE_OPEN[side] * 0.45) {
+      const rest = Math.sign(offset) * SWIPE_OPEN[side];
+      moveRow(row, layer, rest);
+      openSwipe = { row, layer, offset: rest };
+    } else {
+      openSwipe = { row, layer, offset: 0 };
+      closeSwipe();
+    }
+  });
+}
+window.addEventListener('scroll', () => { if (openSwipe && !swipe) closeSwipe(); }, { passive: true });
 $('months').addEventListener('pointerover', (event) => {
   const button = event.target.closest('.more');
   if (button && event.pointerType === 'mouse' && !popoverPinned) showPopover(button, false);
@@ -848,8 +1070,7 @@ $('btn-change').addEventListener('click', () => {
 $('btn-pick-cancel').addEventListener('click', () => {
   showError(null);
   show('view-sheet');
-  $('btn-add').hidden = false;
-  $('btn-reset').hidden = false;
+  showSheetControls(true);
 });
 
 // Order of the month cards: a toggle between oldest first (like the sheet) and newest first.

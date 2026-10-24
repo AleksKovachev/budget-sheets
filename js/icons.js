@@ -20,6 +20,8 @@ const PATHS = {
   external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   sync: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/>',
   reset: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/>', // (sync, mirrored)
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   close: '<path stroke-width="2.2" d="M6 6l12 12M18 6 6 18"/>',
   plus: '<path stroke-width="2.4" d="M12 5v14M5 12h14"/>',
   chevronLeft: '<path d="M15 5l-7 7 7 7"/>',

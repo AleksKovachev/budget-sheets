@@ -2,7 +2,7 @@
 
 import { storage } from './storage.js';
 import { icon } from './icons.js';
-import { signInEndedText, idleSecondsLeft, stayActive } from './auth.js';
+import { signInEndedText, idleSecondsLeft, stayActive, signOutNow } from './auth.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -301,34 +301,61 @@ function setUpWidthCheck() {
 
 const IDLE_WARNING_S = 120;
 
-// In the last two minutes: a countdown with "Stay signed in", which starts the wait again.
+// In the last two minutes: a window in the middle of the screen (over everything, also over other dialogs)
+// with a countdown, "Stay signed in" (the wait starts again; so does the X, Esc, or any other use of the
+// app) and "Sign out".
 function setUpIdleWarning() {
-  let box = null;
-  let text = null;
+  let dialog = null;
+  let time = null;
+  const close = () => {
+    if (dialog?.open) dialog.close();
+    dialog?.remove();
+    dialog = null;
+  };
+  const stay = () => {
+    stayActive();
+    close();
+  };
+  const build = () => {
+    dialog = el('dialog', 'idle-warning');
+    dialog.setAttribute('aria-label', 'Automatic sign-out');
+    const head = el('div', 'idle-head');
+    const x = el('button', 'icon-button');
+    x.type = 'button';
+    x.title = 'Stay signed in';
+    x.setAttribute('aria-label', 'Stay signed in');
+    x.append(icon('close'));
+    x.addEventListener('click', stay);
+    head.append(el('span', null, 'Automatic sign-out in …'), x);
+    time = el('div', 'idle-time');
+    const buttons = el('div', 'idle-buttons');
+    const keep = el('button', 'primary', 'Stay signed in');
+    keep.type = 'button';
+    keep.addEventListener('click', stay);
+    const out = el('button', null, 'Sign out');
+    out.type = 'button';
+    out.addEventListener('click', () => {
+      close();
+      signOutNow();
+    });
+    buttons.append(keep, out);
+    dialog.append(head, time, buttons);
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      stay();
+    });
+    document.body.append(dialog);
+    dialog.showModal(); // On top of any dialog already open.
+    keep.focus();
+  };
   const update = () => {
     const left = idleSecondsLeft();
     if (left === null || left === 0 || left > IDLE_WARNING_S || document.visibilityState !== 'visible') {
-      box?.remove();
-      box = null;
+      close();
       return;
     }
-    if (!box) {
-      box = el('div', 'idle-warning');
-      box.setAttribute('role', 'alert');
-      text = el('span');
-      const stay = el('button', 'primary', 'Stay signed in');
-      stay.type = 'button';
-      stay.addEventListener('click', () => {
-        stayActive();
-        update();
-      });
-      box.append(text, stay);
-    }
-    // Inside an open dialog when there is one: everything outside it can't be clicked meanwhile.
-    const container = document.querySelector('dialog[open]') || document.body;
-    if (box.parentElement !== container) container.append(box);
-    const time = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-    text.textContent = `The app hasn't been used for a while: signing out in ${time}.`;
+    if (!dialog) build();
+    time.textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
   };
   setInterval(update, 500);
 }

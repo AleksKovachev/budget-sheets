@@ -262,14 +262,22 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
 
 /* ---- Summary ---- */
 
-.summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; }
+/* Balance card and the totals table. The 8px of page-coloured padding above and below (cancelled out by
+   the margins) is room around the cards while they stick under the top bar. */
+.summary { display: flex; flex-wrap: wrap; gap: 12px; margin: -8px 0 4px; padding: 8px 0; background: var(--bg); }
+/* Pinned (default): stays under the top bar; the month headers stick below it (--summary-h, app.js). */
+.summary.pinned { position: sticky; top: var(--topbar-h, 0px); z-index: 3; }
+.summary.totals-hidden .totals-wrap { display: none; }
 .balance, .totals-wrap {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-.balance { flex: 1 1 240px; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 14px 16px; }
+.balance { flex: 1 1 240px; display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
+.balance-text { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .balance strong { font-size: 21px; }
+/* Pin and "totals" switch on the right of the balance card. */
+.balance-tools { flex: none; display: flex; gap: 6px; }
 .totals-wrap { flex: 1 1 320px; overflow: hidden; }
 .totals { border-collapse: collapse; width: 100%; font-size: 15px; }
 .totals th, .totals td { padding: 7px 12px; white-space: nowrap; }
@@ -357,7 +365,7 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
    underneath don't show through the rounded corners; the inner layer draws the rounded header. */
 .month-sticky {
   position: sticky;
-  top: var(--topbar-h, 0px);
+  top: calc(var(--topbar-h, 0px) + var(--summary-h, 0px));
   z-index: 2;
   margin: -1px -1px 0;
   background: var(--bg);
@@ -401,9 +409,38 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
 .sort-button svg.icon { width: 15px; height: 15px; }
 
 .entries .entry { border-top: 1px solid var(--line); }
-.entries .entry:first-child { border-top: none; }
-.entries .entry:nth-child(even) { background: var(--row-alt); }
-.entries .entry:last-child { border-radius: 0 0 9px 9px; }
+/* Swiping a row (app.js): the row slides over buttons lying behind it. pan-y: up/down still scrolls the
+   page and two fingers still zoom; sideways moves are the swipe. */
+.entries { position: relative; }
+.entries:has(> .entry.swiping) { overflow: hidden; } /* The moved row doesn't stick out of its card. */
+.entries .entry.editable { touch-action: pan-y pinch-zoom; }
+.entries .entry.swiping { z-index: 1; background: var(--surface); -webkit-user-select: none; user-select: none; }
+.entries .entry.alt.swiping { background: var(--row-alt); }
+.swipe-actions { position: absolute; left: 0; right: 0; z-index: 0; display: flex; justify-content: space-between; }
+.entries-tail .swipe-actions { border-radius: 0 0 9px 9px; overflow: hidden; }
+.swipe-side { display: flex; }
+.swipe-actions[data-show="left"] .swipe-side.right, .swipe-actions[data-show="right"] .swipe-side.left { visibility: hidden; }
+.swipe-btn {
+  width: 56px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+.swipe-btn svg.icon { width: 22px; height: 22px; }
+.swipe-btn.add { background: var(--accent) !important; color: var(--accent-text); }
+.swipe-btn.add + .swipe-btn.add { border-left: 1px solid rgb(0 0 0 / 0.2); }
+.swipe-btn.delete { width: 64px; background: var(--personal) !important; }
+.swipe-btn:active { filter: brightness(0.88); }
+
+/* (The last row sits in .entries-tail, after .month-body: see card() in app.js.) */
+.month-body .entries .entry:first-child,
+.month-body:has(.entries:empty) + .entries-tail .entry { border-top: none; }
+.entries .entry.alt { background: var(--row-alt); }
+.entries-tail .entry { border-radius: 0 0 9px 9px; }
 @media (hover: hover) {
   .entries .entry:hover { background: var(--hover); }
 }
@@ -696,27 +733,21 @@ input.invalid { border-color: var(--personal); outline: 1px solid var(--personal
 }
 
 /* "Signing out in 1:45" with "Stay signed in" (ui.js), above everything, also above dialogs. */
-.idle-warning {
-  position: fixed;
-  left: 50%;
-  bottom: 16px;
-  transform: translateX(-50%);
-  z-index: 90;
-  width: min(440px, calc(100% - 16px));
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
+dialog.idle-warning {
+  width: min(380px, calc(100% - 32px));
+  padding: 14px 16px 16px;
   border: 1px solid var(--accent);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow);
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
 }
-.idle-warning span { flex: 1; }
-.idle-warning button { flex: none; }
+dialog.idle-warning::backdrop { background: rgb(0 0 0 / 0.6); }
+.idle-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 15px; }
+.idle-time { margin: 10px 0 16px; text-align: center; font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+.idle-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.idle-buttons button { padding: 10px 12px; font-weight: 600; }
+.idle-buttons button:not(.primary) { border-color: var(--accent); color: var(--accent); }
 
 /* Tooltip shown by pressing and holding a button with a finger (ui.js). */
 .touch-tip {

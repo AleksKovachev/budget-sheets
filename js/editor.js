@@ -6,9 +6,9 @@
 // rules put them (budget.js: placeEntry / rowsToDelete): sorted by date, one blank row between months.
 
 import { quoteTab } from './sheets.js';
-import { parseYearTab, placeEntry, rowsToDelete, staysInPlace, moneyColumn } from './budget.js';
+import { parseYearTab, placeEntry, rowsToDelete, staysInPlace, moneyColumn, CARRY_ROW } from './budget.js';
 import { cannotCreate, confirmCreate, createYearTab } from './yeartabs.js';
-import { isoToSerial, isoToBg, bgToIso } from './dates.js';
+import { isoToSerial, isoToBg, bgToIso, serialToIso } from './dates.js';
 import { el, columnLetter, placeFloating, openDialog, dialogButton, confirmDialog, touchInput } from './ui.js';
 import { icon, categoryIcon } from './icons.js';
 import { openDatePopup, closeDatePopup, todayIso } from './calendar.js';
@@ -126,8 +126,13 @@ export function createEditor(ctx) {
     const target = iso.slice(0, 4);
     await change([title, target], async () => {
       const fresh = await checkUnchanged(title, entry.rowNumber);
+      const before = rowCells(fresh, entry.rowNumber);
+      const moved = [...before];
+      moved[DATE_COLUMN] = isoToSerial(iso);
+      const op = { kind: 'edit', fromTitle: title, toTitle: target, from: before, to: moved, row: entry.rowNumber };
       if (target === title && staysInPlace(year, entry, iso)) {
         await writeCells(title, entry.rowNumber, [[DATE_COLUMN, isoToSerial(iso)]]);
+        record('Change date', { ...op, toRow: entry.rowNumber });
         return;
       }
       if (!(await ensureYearTab(target))) return;
@@ -150,6 +155,9 @@ export function createEditor(ctx) {
       }
       const removal = rowsToDelete(parseYearTab(title, after), oldRow);
       await ctx.api.deleteRows(id(), sheetIdOf(title), removal.start - 1, removal.count);
+      // Undo puts it back below the row it was below (unless its month's blank row went too).
+      const fromAbove = removal.count === 1 ? rowCells(fresh, entry.rowNumber - 1) : null;
+      record('Change date', { ...op, toRow: placed.row, fromAbove });
     });
   }
 
@@ -170,6 +178,13 @@ export function createEditor(ctx) {
       }))) return;
       const removal = rowsToDelete(parseYearTab(year.title, fresh), entry.rowNumber);
       await ctx.api.deleteRows(id(), sheetIdOf(year.title), removal.start - 1, removal.count);
+      record('Delete record', {
+        kind: 'delete',
+        title: year.title,
+        cells: rowCells(fresh, entry.rowNumber),
+        row: entry.rowNumber,
+        above: removal.count === 1 ? rowCells(fresh, entry.rowNumber - 1) : null,
+      });
     });
   }
 
@@ -202,8 +217,12 @@ export function createEditor(ctx) {
 
   async function setCells(year, entry, cells) {
     await change([year.title], async () => {
-      await checkUnchanged(year.title, entry.rowNumber);
+      const fresh = await checkUnchanged(year.title, entry.rowNumber);
       await writeCells(year.title, entry.rowNumber, cells);
+      const before = rowCells(fresh, entry.rowNumber);
+      const after = [...before];
+      for (const [column, value] of cells) after[column] = value ?? '';
+      record(editLabel(cells.map(([c]) => c)), { kind: 'edit', fromTitle: year.title, toTitle: year.title, from: before, to: after, row: entry.rowNumber });
     });
   }
 
@@ -220,7 +239,146 @@ export function createEditor(ctx) {
       const parsed = parseYearTab(year.title, fresh);
       await insertRowsAt(year.title, parsed, row, 1);
       await writeCells(year.title, row, [[DATE_COLUMN, isoToSerial(iso)]]);
+      const cells = Array(INPUT_COLUMNS).fill('');
+      cells[DATE_COLUMN] = isoToSerial(iso);
+      record('Insert empty record', { kind: 'add', title: year.title, cells, row, above: rowCells(fresh, row - 1) });
     });
+  }
+
+  // ---- Undo and redo (changes made in this app, during this visit) ----
+  // Each change is kept as what a row held before and after it. Undoing finds that row again by its
+  // content (other rows may have been added or removed meanwhile) and puts the old content back; if the
+  // row was changed in Google Sheets since, nothing is done and that step is dropped.
+
+  const MAX_HISTORY = 50;
+  const done = []; // { label, op }
+  const undone = [];
+  const historyChanged = () => ctx.historyChanged?.();
+
+  function record(label, op) {
+    done.push({ label, op });
+    if (done.length > MAX_HISTORY) done.shift();
+    undone.length = 0;
+    historyChanged();
+  }
+
+  function editLabel(columns) {
+    if (columns.includes(DATE_COLUMN)) return 'Change date';
+    if (columns.includes(CATEGORY_COLUMN)) return 'Change category';
+    if (columns.includes(DESCRIPTION_COLUMN)) return 'Change description';
+    return 'Change amounts';
+  }
+
+  // The row holding exactly `cells` (A..I): `hint` if it still does, otherwise the nearest such row.
+  function locate(values, cells, hint) {
+    if (same(rowCells(values, hint), cells)) return hint;
+    let best = null;
+    for (let r = CARRY_ROW; r <= values.length; r++) { // (Row 4 too: an entry can be right below it.)
+      if (same(rowCells(values, r), cells) && (best === null || Math.abs(r - hint) < Math.abs(best - hint))) best = r;
+    }
+    if (best === null) throw new Error('That record was changed or removed in Google Sheets in the meantime, so this step can\'t be done.');
+    return best;
+  }
+
+  // Puts `cells` back right below the row it used to be below (`above`, looked for near row - 1), so it
+  // returns to its old place even among entries of the same day. Returns the row, or null if not found.
+  async function insertBelow(title, fresh, above, row, cells) {
+    if (!above) return null;
+    let at;
+    try { at = locate(fresh, above, row - 1) + 1; } catch { return null; }
+    await insertRowsAt(title, parseYearTab(title, fresh), at, 1);
+    await writeCells(title, at, cells.map((v, c) => [c, v]).filter(([, v]) => v !== ''));
+    return at;
+  }
+
+  // An entry's content goes from `from` (in fromTitle) to `to` (in toTitle), moving rows if the date needs
+  // it; `above` (optional): the row it should end up below. Returns the row it ends up in (a hint for the
+  // way back).
+  async function applyEdit({ fromTitle, toTitle, from, to, row, above, toRow }) {
+    const fresh = await freshValues(fromTitle);
+    const at = locate(fresh, from, row);
+    const iso = typeof to[DATE_COLUMN] === 'number' ? serialToIso(to[DATE_COLUMN]) : null;
+    if (fromTitle === toTitle) {
+      const parsed = parseYearTab(fromTitle, fresh);
+      const entry = parsed.entries.find((e) => e.rowNumber === at);
+      if (!iso || !entry || to[DATE_COLUMN] === from[DATE_COLUMN] || staysInPlace(parsed, entry, iso)) {
+        await writeCells(fromTitle, at, to.map((v, c) => [c, v]).filter(([c]) => to[c] !== from[c]));
+        return at;
+      }
+    }
+    if (!(await ensureYearTab(toTitle))) throw new Error('Cancelled.');
+    // Add at the new place first, then remove the old row (as when changing a date).
+    const target = toTitle === fromTitle ? fresh : await freshValues(toTitle);
+    let newRow = await insertBelow(toTitle, target, above, toRow ?? row, to);
+    if (newRow === null) newRow = (await addRow(toTitle, iso, to)).row;
+    const after = await freshValues(fromTitle);
+    const oldRow = toTitle === fromTitle && newRow <= at ? at + 1 : at;
+    const removal = rowsToDelete(parseYearTab(fromTitle, after), locate(after, from, oldRow));
+    await ctx.api.deleteRows(id(), sheetIdOf(fromTitle), removal.start - 1, removal.count);
+    return toTitle === fromTitle && removal.start < newRow ? newRow - removal.count : newRow;
+  }
+
+  // Adds an entry: right below the row it was below before (`above`), otherwise where its date puts it.
+  async function applyAdd({ title, cells, row, above }) {
+    if (!(await ensureYearTab(title))) throw new Error('Cancelled.');
+    const fresh = await freshValues(title);
+    const at = await insertBelow(title, fresh, above, row, cells);
+    return at ?? (await addRow(title, serialToIso(cells[DATE_COLUMN]), cells)).row;
+  }
+
+  // Removes an entry's row (and its month's blank row if the month empties). Returns where it was.
+  async function applyRemove({ title, cells, row }) {
+    const fresh = await freshValues(title);
+    const at = locate(fresh, cells, row);
+    const removal = rowsToDelete(parseYearTab(title, fresh), at);
+    await ctx.api.deleteRows(id(), sheetIdOf(title), removal.start - 1, removal.count);
+    // Only a single row can go back exactly where it was; with the month's blank row it's placed by date.
+    return { row: at, above: removal.count === 1 ? rowCells(fresh, at - 1) : null };
+  }
+
+  // Runs one step backwards (undo) or forwards (redo); the ops are kept up to date with row hints.
+  async function step(back) {
+    const from = back ? done : undone;
+    const to = back ? undone : done;
+    const item = from.pop();
+    if (!item) return;
+    historyChanged();
+    const { op } = item;
+    const titles = [op.title, op.fromTitle, op.toTitle].filter(Boolean);
+    let ok = false;
+    await change([...new Set(titles)], async () => {
+      try {
+        if (op.kind === 'edit') {
+          // Back: to its old place (below the row it was below); forward: where the date puts it.
+          const swapped = back
+            ? { fromTitle: op.toTitle, toTitle: op.fromTitle, from: op.to, to: op.from, row: op.toRow ?? op.row, toRow: op.row, above: op.fromAbove }
+            : { fromTitle: op.fromTitle, toTitle: op.toTitle, from: op.from, to: op.to, row: op.row };
+          const landed = await applyEdit(swapped);
+          if (back) op.row = landed;
+          else op.toRow = landed;
+        } else if ((op.kind === 'add') === back) {
+          const gone = await applyRemove(op); // Undo an add, or redo a delete.
+          op.row = gone.row;
+          op.above = gone.above;
+        } else {
+          op.row = await applyAdd(op); // Undo a delete, or redo an add.
+        }
+        ok = true;
+      } catch (err) {
+        throw new Error(`Couldn't ${back ? 'undo' : 'redo'} "${item.label}": ${err.message}`);
+      }
+    });
+    if (ok) to.push(item);
+    historyChanged();
+  }
+
+  const undo = () => step(true);
+  const redo = () => step(false);
+  const history = () => ({ undo: done.at(-1)?.label ?? null, redo: undone.at(-1)?.label ?? null });
+  function clearHistory() {
+    done.length = 0;
+    undone.length = 0;
+    historyChanged();
   }
 
   // ---- Popups for editing ----
@@ -522,7 +680,8 @@ export function createEditor(ctx) {
       try {
         const title = iso.slice(0, 4);
         if (!(await ensureYearTab(title))) return;
-        await addRow(title, iso, values);
+        const placed = await addRow(title, iso, values);
+        record('Add record', { kind: 'add', title, cells: values, row: placed.row, above: null });
         await ctx.refresh([title]);
         close('added');
         ctx.notice(`Added: ${isoToBg(iso)} · ${category}${values[DESCRIPTION_COLUMN] ? ` · ${values[DESCRIPTION_COLUMN]}` : ''}`);
@@ -551,7 +710,7 @@ export function createEditor(ctx) {
     else dateInput.focus();
   }
 
-  return { editEntry, insertEmpty, deleteEntry, openAddDialog, openEntryMenu, closePopup };
+  return { editEntry, insertEmpty, deleteEntry, openAddDialog, openEntryMenu, closePopup, undo, redo, history, clearHistory };
 }
 
 // ---- Small builders ----
