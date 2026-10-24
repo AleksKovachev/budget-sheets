@@ -197,7 +197,8 @@ function setUpPin() {
   // Sticky elements further down (month headers) sit just below the pinned bar.
   const updateOffset = () => {
     const pinned = !document.body.classList.contains('topbar-unpinned');
-    document.documentElement.style.setProperty('--topbar-h', pinned ? `${bar.offsetHeight}px` : '0px');
+    // Exact (fractional) height: a rounded one can leave a hairline gap on high-resolution screens.
+    document.documentElement.style.setProperty('--topbar-h', pinned ? `${bar.getBoundingClientRect().height}px` : '0px');
   };
   new ResizeObserver(updateOffset).observe(bar);
   button.addEventListener('click', () => {

@@ -516,7 +516,8 @@ function setUpSummary() {
   const totals = $('btn-totals');
   // Month headers stick just below the pinned cards.
   const updateOffset = () => {
-    const height = summary.classList.contains('pinned') ? summary.offsetHeight : 0;
+    // Exact (fractional) height: a rounded one can leave a hairline gap on high-resolution screens.
+    const height = summary.classList.contains('pinned') ? summary.getBoundingClientRect().height : 0;
     document.documentElement.style.setProperty('--summary-h', `${height}px`);
   };
   new ResizeObserver(updateOffset).observe(summary);
@@ -917,8 +918,11 @@ let openSwipe = null; // The row resting open: { row, layer, offset }
 function swipeLayer(row) {
   const { year, entry, gaps } = rowInfo.get(row);
   const layer = el('div', 'swipe-actions');
-  layer.style.top = `${row.offsetTop}px`;
-  layer.style.height = `${row.offsetHeight}px`;
+  // Exact (fractional) position, 1px inside the row at the top and bottom: a rounded size can stick out
+  // under the row as a coloured hairline on phones.
+  const box = row.getBoundingClientRect();
+  layer.style.top = `${box.top - row.parentElement.getBoundingClientRect().top + 1}px`;
+  layer.style.height = `${box.height - 2}px`;
   const button = (className, iconName, label, action) => {
     const b = el('button', `swipe-btn ${className}`);
     b.type = 'button';

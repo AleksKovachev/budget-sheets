@@ -89,6 +89,8 @@ body.topbar-unpinned .topbar { position: static; }
 .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; padding-bottom: 8px; }
 .topbar h1 { font-size: 23px; margin: 0; letter-spacing: 0.2px; white-space: nowrap; }
 .topbar h1 a { color: inherit; text-decoration: none; }
+.topbar-left { display: flex; align-items: center; gap: 6px; }
+.topbar-left h1 { margin-right: 6px; }
 .topbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .user { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 
@@ -369,6 +371,9 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
   z-index: 2;
   margin: -1px -1px 0;
   background: var(--bg);
+  /* A page-coloured strip just above the header: covers rows and card edges in any sub-pixel gap left
+     between the header and the bars above it at some display scalings. */
+  box-shadow: 0 -3px 0 var(--bg);
 }
 .month-sticky-inner {
   background: var(--head);
@@ -518,6 +523,10 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
   .month-head { padding: 8px 10px 2px; }
   .month-head .muted { font-size: 12px; }
   .topbar h1 { font-size: 20px; }
+  /* Two tidy rows: title with undo / redo, then the buttons (the signed-in name at the right end). */
+  .topbar-inner { flex-wrap: wrap; row-gap: 6px; }
+  .topbar-right { flex: 1 1 100%; justify-content: flex-start; flex-wrap: nowrap; }
+  .topbar-right .user { margin-left: auto; }
   .cat-badge { width: 28px; height: 28px; }
   .cat-badge .icon { width: 23px; height: 23px; }
   .entry .what { gap: 8px; }

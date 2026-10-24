@@ -167,7 +167,7 @@ export function createEditor(ctx) {
       .filter(([f]) => entry.money[p.key][f])
       .map(([f, label]) => `${p.name} ${label.toLowerCase()} ${entry.money[p.key][f]}`));
     const what = [entry.date ? isoToBg(entry.date) : null, entry.category, entry.description, amounts.join(', ')].filter(Boolean).join(' · ');
-    if (!(await confirmDialog({ title: 'Delete this entry?', message: [what || '(empty entry)', 'Its row is removed from Google Sheets.'], confirm: 'Delete' }))) return;
+    if (!(await confirmDialog({ title: 'Delete this entry?', message: [what || '(empty entry)', 'Its row will be removed from Google Sheets.'], confirm: 'Delete' }))) return;
     await change([year.title], async () => {
       const fresh = await checkUnchanged(year.title, entry.rowNumber);
       const extra = (fresh[entry.rowNumber - 1] || []).slice(INPUT_COLUMNS).some((v) => v !== '' && v !== null);

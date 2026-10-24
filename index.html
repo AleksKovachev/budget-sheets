@@ -22,12 +22,15 @@
 <body>
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <h1>Budget Sheets</h1>
+      <!-- Undo / redo next to the title, where browsers have their back / forward arrows. -->
+      <div class="topbar-left">
+        <h1>Budget Sheets</h1>
+        <button id="btn-undo" type="button" class="icon-button" aria-label="Undo" data-icon="undo" hidden disabled></button>
+        <button id="btn-redo" type="button" class="icon-button" aria-label="Redo" data-icon="redo" hidden disabled></button>
+      </div>
       <div class="topbar-right">
         <a id="btn-phone" class="button" href="dev/phone.html" data-icon="phone" hidden>Phone view</a>
         <button id="btn-sync" type="button" class="sync-button" hidden></button>
-        <button id="btn-undo" type="button" class="icon-button" aria-label="Undo" data-icon="undo" hidden disabled></button>
-        <button id="btn-redo" type="button" class="icon-button" aria-label="Redo" data-icon="redo" hidden disabled></button>
         <button id="btn-reset" type="button" class="icon-button" title="Reset the page layout (period and order)" aria-label="Reset the page layout" data-icon="reset" hidden></button>
         <button id="btn-pin" type="button" class="icon-button" aria-label="Keep the top bar visible"></button>
         <button id="btn-theme" type="button" class="icon-button" aria-label="Switch theme"></button>
