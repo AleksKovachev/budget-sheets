@@ -5,14 +5,15 @@ import { isConfigured, initAuth, signIn, signOut, dropToken, getAccessToken, fet
 import { decryptFor } from './secret.js';
 import {
   ApiError, parseSpreadsheetId, quoteTab, getSpreadsheet, getValues, batchGetValues, spreadsheetUrl,
-  batchUpdateValues, batchClearValues, insertRows, deleteRows, duplicateSheet,
+  batchUpdateValues, batchClearValues, insertRows, deleteRows, duplicateSheet, deleteSheet,
 } from './sheets.js';
+import { createHistory } from './history.js';
 import { createEditor } from './editor.js';
 import { isYearTab, parseYearTab, identifyPerson, toEur } from './budget.js';
 import { isoToBg } from './dates.js';
 import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.js';
 import { storage, SHEET_KEY, TAB_KEY, PERIOD_KEY, ORDER_KEY, ENTRY_ORDER_KEY, clearViewState } from './storage.js';
-import { $, el, showError, setUpPage, withLoading, showSessionBanner } from './ui.js';
+import { $, el, showError, setUpPage, withLoading, showSessionBanner, setUpUndo } from './ui.js';
 import { icon, categoryIcon } from './icons.js';
 import { startSync, PAST_YEARS_MS } from './sync.js';
 import { PeriodPicker, monthPeriod, todayIso } from './period.js';
@@ -21,7 +22,7 @@ import { DEFAULT_SPREADSHEET, PEOPLE, BGN_PER_EUR, CATEGORIES, categoryStyle, ba
 const VIEWS = ['view-message', 'view-signin', 'view-pick', 'view-sheet'];
 
 // Replaced by the fixture in development (?fixture).
-let api = { getSpreadsheet, getValues, batchGetValues, batchUpdateValues, batchClearValues, insertRows, deleteRows, duplicateSheet };
+let api = { getSpreadsheet, getValues, batchGetValues, batchUpdateValues, batchClearValues, insertRows, deleteRows, duplicateSheet, deleteSheet };
 let editor = null; // Editing and adding entries (editor.js).
 let categoryList = []; // From the sheet's List tab (the Category dropdown).
 const rowInfo = new WeakMap(); // Entry row element -> { year, entry }
@@ -124,7 +125,7 @@ function signedOut(idle) {
   document.querySelectorAll('dialog.modal').forEach((d) => d.remove());
   picker?.reset(defaultPeriod());
   showOrder();
-  editor?.clearHistory();
+  undoList.clear();
   $('user').hidden = true;
   showSheetControls(false);
   showError(null);
@@ -174,7 +175,7 @@ async function openSpreadsheet(id) {
     cache.clear();
     data = null;
     storage.local.remove(TAB_KEY);
-    editor?.clearHistory();
+    undoList.clear();
   }
   spreadsheet = { id, meta };
   if (id !== 'fixture') storage.local.set(SHEET_KEY, id);
@@ -218,7 +219,7 @@ async function openSpreadsheet(id) {
       $('error').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     },
     notice: (text) => { $('notice').textContent = text; },
-    historyChanged: updateHistoryButtons,
+    history: undoList,
   });
   await load(picker.period);
   await loadCategories();
@@ -226,35 +227,33 @@ async function openSpreadsheet(id) {
   updateHistoryButtons();
 }
 
-// ---- Undo / redo (editor.js): arrows in the top bar, Ctrl+Z and Ctrl+Y / Ctrl+Shift+Z ----
+// ---- Undo / redo (history.js, shared with the raw data page) ----
 
-function updateHistoryButtons() {
-  const { undo, redo } = editor?.history() ?? {};
-  for (const [id, label, keys, what] of [['btn-undo', 'Undo', 'Ctrl+Z', undo], ['btn-redo', 'Redo', 'Ctrl+Y', redo]]) {
-    const button = $(id);
-    button.disabled = !what;
-    button.title = what ? `${label}: ${what} (${keys})` : `Nothing to ${label.toLowerCase()} (${keys})`;
-    button.setAttribute('aria-label', button.title);
-  }
-}
+const undoList = createHistory({
+  get api() { return api; }, // (The fixture's in development.)
+  spreadsheetId: () => spreadsheet.id,
+  meta: () => spreadsheet.meta,
+  reloadMeta,
+  changed: () => updateHistoryButtons(),
+});
 
-const historyStep = (back) => {
-  if (!editor || loading || !data) return;
-  editor.closePopup();
-  if (back) editor.undo();
-  else editor.redo();
-};
-$('btn-undo').addEventListener('click', () => historyStep(true));
-$('btn-redo').addEventListener('click', () => historyStep(false));
-document.addEventListener('keydown', (event) => {
-  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-  const key = event.key.toLowerCase();
-  if (key !== 'z' && key !== 'y') return;
-  // Typing fields keep their own undo; nothing happens while a dialog is open.
-  if (event.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
-  if ($('view-sheet').hidden) return;
-  event.preventDefault();
-  historyStep(key === 'z' && !event.shiftKey);
+const updateHistoryButtons = setUpUndo({
+  labels: () => (spreadsheet ? undoList.labels() : null),
+  ready: () => Boolean(editor && data && !loading && !$('view-sheet').hidden),
+  step: (back) => {
+    editor.closePopup();
+    run(async () => {
+      loading = true;
+      try {
+        const result = await undoList.step(back);
+        if (!result) return;
+        if (result.tabs) await reloadMeta();
+        await refresh(result.titles);
+      } finally {
+        loading = false;
+      }
+    });
+  },
 });
 
 // ---- Page layout (period, order of months and entries): kept until signing out ----

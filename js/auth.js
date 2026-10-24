@@ -134,9 +134,10 @@ export async function fetchUserEmail() {
 // ---- Signing out after IDLE_MS without use ----
 
 let lastWrite = 0;
+let warningShown = false; // While the sign-out warning is up, only its buttons decide (stayActive).
 function markActive(force = false) {
   const now = Date.now();
-  if (!force && now - lastWrite < 5000) return; // At most one write every 5 seconds.
+  if (!force && (warningShown || now - lastWrite < 5000)) return; // At most one write every 5 seconds.
   lastWrite = now;
   storage.local.set(ACTIVE_KEY, String(now));
 }
@@ -153,6 +154,12 @@ export function idleSecondsLeft() {
 // "Stay signed in": counts as using the app (the IDLE_MS wait starts again).
 export function stayActive() {
   markActive(true);
+}
+
+// The sign-out warning is shown (true) or gone (false): meanwhile clicks, keys and scrolling elsewhere
+// don't count as using the app.
+export function setWarningShown(shown) {
+  warningShown = shown;
 }
 
 // "Sign out" from the warning before the idle sign-out: the page shows its sign-in card (watchIdle).

@@ -33,12 +33,13 @@ function parseRange(range) {
   const title = match[1] !== undefined ? match[1].replace(/''/g, "'") : match[2];
   if (!match[3]) return { title, r1: null };
   const [a, b] = match[3].replace(/\$/g, '').split(':');
-  const cell = (ref) => {
-    const m = ref.match(/^([A-Z]+)(\d+)$/i);
-    return { r: Number(m[2]) - 1, c: colIndex(m[1]) };
+  // "B5", or a whole row "5" (as in "5:5": columns A..ZZ).
+  const cell = (ref, last) => {
+    const m = ref.match(/^([A-Z]*)(\d+)$/i);
+    return { r: Number(m[2]) - 1, c: m[1] ? colIndex(m[1]) : last ? 701 : 0 };
   };
-  const start = cell(a);
-  const end = b ? cell(b) : start;
+  const start = cell(a, false);
+  const end = b ? cell(b, true) : start;
   return { title, r1: start.r, c1: start.c, r2: end.r, c2: end.c };
 }
 
@@ -75,14 +76,25 @@ export async function loadFixtureApi() {
   };
 
   // Copies, like every response of the real API (callers keep and compare what they read).
-  function slice(range) {
+  // formulas: true gives formula cells as their formula (valueRenderOption FORMULA).
+  function slice(range, formulas = false) {
     const { tab, r1, c1, r2, c2 } = tabFor(range);
-    if (r1 === null) return tab.values.map((row) => [...row]);
+    const at = (r, c) => (formulas && tab.formulas[`${r},${c}`]) || valueAt(tab, r, c);
+    const trim = (row) => {
+      while (row.length && row.at(-1) === '') row.pop();
+      return row;
+    };
+    if (r1 === null) {
+      return tab.values.map((row, r) => {
+        const width = Math.max(row.length, ...Object.keys(tab.formulas).filter((k) => k.startsWith(`${r},`)).map((k) => Number(k.split(',')[1]) + 1));
+        return trim(Array.from({ length: width }, (_, c) => at(r, c)));
+      });
+    }
     const rows = [];
     for (let r = r1; r <= r2; r++) {
       const row = [];
-      for (let c = c1; c <= c2; c++) row.push(valueAt(tab, r, c));
-      rows.push(row);
+      for (let c = c1; c <= c2; c++) row.push(at(r, c));
+      rows.push(trim(row));
     }
     return rows;
   }
@@ -143,6 +155,12 @@ export async function loadFixtureApi() {
     return out;
   };
 
+  // A whole tab (values and formulas) as text, to check that undo puts everything back exactly.
+  window.__fixtureTab = (title) => {
+    const tab = tabs.get(title);
+    return tab ? JSON.stringify(slice(`'${title}'`, true)) : null;
+  };
+
   window.__fixtureSet = (range, value) => {
     const { tab, r1, c1 } = tabFor(range);
     setValue(tab, r1, c1, value, false);
@@ -162,12 +180,18 @@ export async function loadFixtureApi() {
         })),
       };
     },
-    // Only raw values exist in the fixture; the render option is ignored.
-    async getValues(_id, range) {
-      return { range, values: slice(range) };
+    // Only raw values exist in the fixture; of the render options only FORMULA makes a difference.
+    async getValues(_id, range, render) {
+      return { range, values: slice(range, render === 'FORMULA') };
     },
-    async batchGetValues(_id, ranges) {
-      return { valueRanges: ranges.map((range) => ({ range, values: slice(range) })) };
+    async batchGetValues(_id, ranges, render) {
+      return { valueRanges: ranges.map((range) => ({ range, values: slice(range, render === 'FORMULA') })) };
+    },
+    async deleteSheet(_id, sheetId) {
+      const tab = bySheetId(sheetId);
+      order.splice(order.indexOf(tab), 1);
+      tabs.delete(tab.title);
+      return {};
     },
     async getGrid(_id, range, { validation = true } = {}) {
       const { tab, r1, c1, r2, c2 } = tabFor(range);

@@ -22,7 +22,12 @@
 <body class="full-width">
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <h1><a id="home" href="index.html">Budget Sheets</a></h1>
+      <!-- Undo / redo next to the title, where browsers have their back / forward arrows. -->
+      <div class="topbar-left">
+        <h1><a id="home" href="index.html">Budget Sheets</a></h1>
+        <button id="btn-undo" type="button" class="icon-button" aria-label="Undo" data-icon="undo" disabled></button>
+        <button id="btn-redo" type="button" class="icon-button" aria-label="Redo" data-icon="redo" disabled></button>
+      </div>
       <div class="topbar-right">
         <a id="btn-phone" class="button" href="dev/phone.html" data-icon="phone" hidden>Phone view</a>
         <button id="btn-sync" type="button" class="sync-button" hidden></button>

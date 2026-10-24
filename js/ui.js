@@ -2,7 +2,7 @@
 
 import { storage } from './storage.js';
 import { icon } from './icons.js';
-import { signInEndedText, idleSecondsLeft, stayActive, signOutNow } from './auth.js';
+import { signInEndedText, idleSecondsLeft, stayActive, signOutNow, setWarningShown } from './auth.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -272,6 +272,41 @@ function setUpPhoneSwitch() {
   button.after(icons);
 }
 
+// ---- Undo / redo: arrows next to the title, Ctrl+Z and Ctrl+Y / Ctrl+Shift+Z (history.js) ----
+
+// labels(): { undo, redo } (what each would do, or null); step(back) runs one; ready(): whether the page
+// can run one now (not while loading or saving). Returns update(), to call when the labels change.
+export function setUpUndo({ labels, step, ready }) {
+  const buttons = { undo: $('btn-undo'), redo: $('btn-redo') };
+  const update = () => {
+    const now = labels() || {};
+    for (const [kind, label, keys] of [['undo', 'Undo', 'Ctrl+Z'], ['redo', 'Redo', 'Ctrl+Y']]) {
+      const button = buttons[kind];
+      button.disabled = !now[kind];
+      button.title = now[kind] ? `${label}: ${now[kind]} (${keys})` : `Nothing to ${label.toLowerCase()} (${keys})`;
+      button.setAttribute('aria-label', button.title);
+    }
+  };
+  const run = (back) => {
+    if (ready()) step(back);
+  };
+  buttons.undo.addEventListener('click', () => run(true));
+  buttons.redo.addEventListener('click', () => run(false));
+  document.addEventListener('keydown', (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key !== 'z' && key !== 'y') return;
+    // Typing fields keep their own undo; nothing happens while a dialog is open.
+    if (event.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
+    event.preventDefault();
+    run(key === 'z' && !event.shiftKey);
+  });
+  // The other page of the app (another tab) may have changed the list.
+  window.addEventListener('storage', update);
+  update();
+  return update;
+}
+
 // ---- Width check (add ?widthcheck to the address): what sticks out past the screen's edges ----
 
 // For finding layout problems on a phone: elements reaching past the left or right edge get a red outline
@@ -303,8 +338,8 @@ function setUpWidthCheck() {
 const IDLE_WARNING_S = 120;
 
 // In the last two minutes: a window in the middle of the screen (over everything, also over other dialogs)
-// with a countdown, "Stay signed in" (the wait starts again; so does the X, Esc, or any other use of the
-// app) and "Sign out".
+// with a countdown, "Stay signed in" (the wait starts again; so does the X) and "Sign out". Only these
+// buttons decide: anything else done in the app meanwhile doesn't count (auth.js, setWarningShown).
 function setUpIdleWarning() {
   let dialog = null;
   let time = null;
@@ -341,17 +376,18 @@ function setUpIdleWarning() {
     });
     buttons.append(keep, out);
     dialog.append(head, time, buttons);
-    dialog.addEventListener('cancel', (event) => {
-      event.preventDefault();
-      stay();
-    });
+    // Esc does nothing here: only the window's buttons decide.
+    dialog.addEventListener('cancel', (event) => event.preventDefault());
     document.body.append(dialog);
     dialog.showModal(); // On top of any dialog already open.
     keep.focus();
   };
   const update = () => {
     const left = idleSecondsLeft();
-    if (left === null || left === 0 || left > IDLE_WARNING_S || document.visibilityState !== 'visible') {
+    const warning = left !== null && left > 0 && left <= IDLE_WARNING_S;
+    // From now on only the buttons count: other clicks, keys or scrolling don't keep the sign-in.
+    setWarningShown(warning);
+    if (!warning || document.visibilityState !== 'visible') {
       close();
       return;
     }

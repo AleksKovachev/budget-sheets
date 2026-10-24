@@ -9,15 +9,16 @@ import { isConfigured, initAuth, signIn, dropToken, getAccessToken, watchIdle, I
 import {
   ApiError, quoteTab, getSpreadsheet, getGrid, batchGetValues,
   updateValues, updateValuesRaw, clearValues, insertRows, deleteRows, batchUpdateValues, batchClearValues, duplicateSheet,
-  spreadsheetUrl,
+  deleteSheet, spreadsheetUrl,
 } from './sheets.js';
 import { serialToBg, bgToIso, isoToBg, isoToSerial } from './dates.js';
 import { isYearTab, CARRY_ROW } from './budget.js';
 import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.js';
 import { storage, SHEET_KEY, TAB_KEY } from './storage.js';
 import {
-  $, el, showError, columnLetter, setUpPage, withLoading, showSessionBanner, openDialog, dialogButton, touchInput,
+  $, el, showError, columnLetter, setUpPage, withLoading, showSessionBanner, openDialog, dialogButton, touchInput, setUpUndo,
 } from './ui.js';
+import { createHistory } from './history.js';
 import { cannotCreate, confirmCreate, createYearTab } from './yeartabs.js';
 import { icon, categoryIcon } from './icons.js';
 import { startSync, SYNC_INTERVAL_MS, PAST_YEARS_MS } from './sync.js';
@@ -37,7 +38,7 @@ const compactQuery = window.matchMedia('(max-width: 600px), (max-height: 500px)'
 
 let api = {
   getSpreadsheet, getGrid, batchGetValues, updateValues, updateValuesRaw, clearValues, insertRows, deleteRows,
-  batchUpdateValues, batchClearValues, duplicateSheet,
+  batchUpdateValues, batchClearValues, duplicateSheet, deleteSheet,
 };
 const ROW_CLIPBOARD_KEY = 'bs.rowClipboard';
 let fixture = false;
@@ -52,6 +53,49 @@ let editing = null; // { td, r, c, control, original }
 let busy = false; // A save or load is running; syncing waits.
 let sync = null;
 let selectedRow = null; // 0-based row marked across the grid (tap its number or a cell in it).
+
+// ---- Undo / redo (history.js, shared with the main page) ----
+
+const undoList = createHistory({
+  get api() { return api; }, // (The fixture's in development.)
+  spreadsheetId: () => spreadsheetId,
+  meta: () => meta,
+  // Just the tab list (the page itself is updated after the step).
+  reloadMeta: async () => { meta = await api.getSpreadsheet(spreadsheetId); },
+  changed: () => updateUndoButtons(),
+});
+
+// Rows first..last (1-based) of the open tab as Sheets has them, formulas as formulas.
+const snapshot = (first, last = first) => undoList.readRows(tab, first, last);
+
+const updateUndoButtons = setUpUndo({
+  labels: () => (meta ? undoList.labels() : null),
+  ready: () => Boolean(meta && tab && !busy && !editing),
+  step: (back) => {
+    closePopups();
+    run(async () => {
+      busy = true;
+      let result;
+      try {
+        result = await undoList.step(back);
+      } finally {
+        busy = false;
+      }
+      if (!result) return;
+      fillYears(); // (A tab may have been created or deleted.)
+      // Show the tab the step changed (the open one if it's among them; the newest if the open one is gone).
+      const shown = result.titles.includes(tab) && yearTitles.includes(tab) ? tab
+        : result.titles.find((t) => yearTitles.includes(t)) || (yearTitles.includes(tab) ? tab : yearTitles[0]);
+      if (shown && shown !== tab) {
+        $('tab-select').value = shown;
+        await loadTab(shown);
+      } else if (yearTitles.includes(tab)) {
+        await reloadTab();
+      }
+      setStatus(`${back ? 'Undone' : 'Redone'}.`);
+    });
+  },
+});
 
 function show(view) {
   for (const v of VIEWS) $(v).hidden = v !== view;
@@ -122,6 +166,7 @@ async function start() {
   watchIdle((idle) => {
     closePopups();
     if (editing) cancelEdit();
+    undoList.clear();
     sync?.pause();
     showError(null);
     showSignIn(idle);
@@ -195,6 +240,8 @@ async function newYearTab() {
     const values = await api.batchGetValues(spreadsheetId, [`${quoteTab(source.title)}!A1:Z1`], 'FORMATTED_VALUE');
     await createYearTab({ api, spreadsheetId, yearText, source, sourceHeader: values.valueRanges[0].values?.[0] || [] });
     await reloadMeta();
+    // Undo deletes the tab again, as long as it's still exactly like this.
+    undoList.record(`Create the ${yearText} tab`, { kind: 'tab', title: yearText, snapshot: await undoList.readTab(yearText) });
     $('tab-select').value = yearText;
     await loadTab(yearText);
   });
@@ -681,6 +728,7 @@ async function pasteRow(r) {
       await refreshRowFromSheet(r);
       throw new Error(`Row ${r + 1} was changed in Google Sheets in the meantime. Nothing was pasted; it now shows the new values.`);
     }
+    const [before] = await snapshot(r + 1);
     const writes = [];
     const clears = [];
     for (let c = 0; c < MIN_COLUMNS; c++) {
@@ -696,6 +744,8 @@ async function pasteRow(r) {
     }
     if (writes.length) await api.batchUpdateValues(spreadsheetId, writes, 'RAW');
     if (clears.length) await api.batchClearValues(spreadsheetId, clears);
+    const [after] = await snapshot(r + 1);
+    undoList.record(`Paste into row ${r + 1}`, { kind: 'edit', inPlace: true, fromTitle: tab, toTitle: tab, from: before, to: after, row: r + 1 });
     await refreshRowFromSheet(r);
   } finally {
     busy = false;
@@ -712,12 +762,15 @@ async function clearRow(r) {
       await refreshRowFromSheet(r);
       throw new Error(`Row ${r + 1} was changed in Google Sheets in the meantime. Nothing was cleared; it now shows the new values.`);
     }
+    const [before] = await snapshot(r + 1);
     const ranges = [];
     for (let c = 0; c < MIN_COLUMNS; c++) {
       const cell = cellAt(r, c);
       if (!cell.formula && cell.shown !== '') ranges.push(`${quoteTab(tab)}!${columnLetter(c)}${r + 1}`);
     }
     if (ranges.length) await api.batchClearValues(spreadsheetId, ranges);
+    const [after] = await snapshot(r + 1);
+    undoList.record(`Clear row ${r + 1}`, { kind: 'edit', inPlace: true, fromTitle: tab, toTitle: tab, from: before, to: after, row: r + 1 });
     await refreshRowFromSheet(r);
   } finally {
     busy = false;
@@ -817,6 +870,7 @@ async function saveCell(r, c, text) {
       throw new Error(`${address} was changed in Google Sheets in the meantime. Nothing was saved; it now shows the new value.`);
     }
 
+    const [before] = await snapshot(r + 1);
     if (value.clear) await api.clearValues(spreadsheetId, range);
     else if (value.raw !== undefined) await api.updateValuesRaw(spreadsheetId, range, [[value.raw]]);
     else await api.updateValues(spreadsheetId, range, [[value.typed]]);
@@ -824,6 +878,8 @@ async function saveCell(r, c, text) {
     // Read back what Sheets made of it.
     const [saved] = await api.getGrid(spreadsheetId, range, { validation: false });
     updateCellFrom(r, c, saved?.values?.[0]);
+    const [after] = await snapshot(r + 1);
+    undoList.record(`Edit ${address}`, { kind: 'edit', inPlace: true, fromTitle: tab, toTitle: tab, from: before, to: after, row: r + 1 });
     setStatus(`Saved ${address}`);
   } finally {
     busy = false;
@@ -840,8 +896,10 @@ async function insertRow(anchor, at) {
       await reloadTab();
       throw new Error(`Row ${anchor + 1} was changed in Google Sheets in the meantime. Nothing was inserted; the tab has been reloaded.`);
     }
+    const [above] = await snapshot(at); // The row the new one comes below (1-based `at`).
     // Inserting below copies the formatting and dropdowns of the row above, inserting above those of the row below.
     await api.insertRows(spreadsheetId, sheetProps().sheetId, at, 1, at > anchor);
+    undoList.record(`Insert row ${at + 1}`, { kind: 'add', plain: true, title: tab, cells: [], row: at + 1, above });
   } finally {
     busy = false;
   }
@@ -862,7 +920,9 @@ async function deleteRow(r) {
       await reloadTab();
       throw new Error(`Row ${r + 1} was changed in Google Sheets in the meantime. Nothing was deleted; the tab has been reloaded.`);
     }
+    const [above, whole] = await snapshot(r, r + 1);
     await api.deleteRows(spreadsheetId, sheetProps().sheetId, r, 1);
+    undoList.record(`Delete row ${r + 1}`, { kind: 'delete', plain: true, title: tab, cells: whole, row: r + 1, above });
   } finally {
     busy = false;
   }

@@ -136,6 +136,11 @@ export async function duplicateSheet(spreadsheetId, sourceSheetId, newSheetName,
   return result.replies[0].duplicateSheet.properties.sheetId;
 }
 
+// Deletes a tab (only used to undo creating a year tab, while it's still exactly as it was made).
+export function deleteSheet(spreadsheetId, sheetId) {
+  return batchUpdate(spreadsheetId, [{ deleteSheet: { sheetId } }]);
+}
+
 export function spreadsheetUrl(spreadsheetId, sheetId) {
   const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
   return sheetId === undefined ? base : `${base}#gid=${sheetId}`;
