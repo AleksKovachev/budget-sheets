@@ -202,13 +202,13 @@ async function openSpreadsheet(id) {
   } else {
     sync.resume();
   }
+  picker.followYears(); // A restored "All time" covers today's year tabs.
   editor ??= createEditor({
     api,
     spreadsheetId: () => spreadsheet.id,
     meta: () => spreadsheet.meta,
     reloadMeta,
     yearTitles: () => yearTitles,
-    cached: (title) => cache.get(title),
     refresh,
     me: () => me,
     categories: () => categoryList,
@@ -231,7 +231,7 @@ async function openSpreadsheet(id) {
 
 const undoList = createHistory({
   get api() { return api; }, // (The fixture's in development.)
-  spreadsheetId: () => spreadsheet.id,
+  spreadsheetId: () => spreadsheet?.id ?? null, // (null after signing out: nothing is recorded then.)
   meta: () => spreadsheet.meta,
   reloadMeta,
   changed: () => updateHistoryButtons(),
@@ -300,7 +300,10 @@ async function reloadMeta() {
   const before = yearTitles.join();
   yearTitles = spreadsheet.meta.sheets.map((s) => s.properties.title).filter(isYearTab).sort((a, b) => b.localeCompare(a));
   for (const title of cache.keys()) if (!yearTitles.includes(title)) cache.delete(title);
-  return yearTitles.join() !== before;
+  const changed = yearTitles.join() !== before;
+  // "All time" grows (or shrinks) with the year tabs.
+  if (changed && picker?.followYears() && data) data.period = picker.period;
+  return changed;
 }
 
 // After a change: re-reads the given years (and any the period now needs) and redraws.

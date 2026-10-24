@@ -161,12 +161,21 @@ export async function loadFixtureApi() {
     return tab ? JSON.stringify(slice(`'${title}'`, true)) : null;
   };
 
+  // An empty row inserted at a 1-based row, as if done in Google Sheets.
+  window.__fixtureInsertRow = (title, row) => shiftRows(title, row - 1, 1);
+
+  // A formula: { formula: '=12.4+3.6', value: 16 } (the fixture can't calculate it).
   window.__fixtureSet = (range, value) => {
     const { tab, r1, c1 } = tabFor(range);
-    setValue(tab, r1, c1, value, false);
+    if (value?.formula) {
+      setValue(tab, r1, c1, value.value, false);
+      tab.formulas[`${r1},${c1}`] = value.formula;
+    } else {
+      setValue(tab, r1, c1, value, false);
+    }
   };
 
-  return {
+  const fixtureApi = {
     async getSpreadsheet() {
       return {
         properties: { title: `${fixture.source} (fixture)`, locale: 'fixture', timeZone: 'no API' },
@@ -277,4 +286,18 @@ export async function loadFixtureApi() {
       return {};
     },
   };
+  // window.__fixtureFail = 'insertRows' (or any method name): its next call fails, like a lost connection.
+  // window.__fixtureCalls counts the calls per method (e.g. to check how many reads something needs).
+  window.__fixtureCalls = {};
+  for (const [name, method] of Object.entries(fixtureApi)) {
+    fixtureApi[name] = async (...args) => {
+      window.__fixtureCalls[name] = (window.__fixtureCalls[name] || 0) + 1;
+      if (window.__fixtureFail === name) {
+        window.__fixtureFail = null;
+        throw new TypeError('Failed to fetch (fixture)');
+      }
+      return method(...args);
+    };
+  }
+  return fixtureApi;
 }

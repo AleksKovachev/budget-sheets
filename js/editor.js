@@ -23,7 +23,7 @@ const DESCRIPTION_COLUMN = 2;
 const MONEY_FIELDS = [['paid', 'Paid'], ['personal', 'Personal'], ['cashIn', 'Cash in']];
 
 // ctx (from app.js): api, spreadsheetId(), meta(), reloadMeta(), yearTitles() (newest first),
-// cached(title) -> { parsed, values }, refresh(titles), me(), categories(), busy(on), showError(err), notice(text)
+// refresh(titles), me(), categories(), busy(on), showError(err), notice(text), history (history.js)
 export function createEditor(ctx) {
   const id = () => ctx.spreadsheetId();
   const sheetIdOf = (title) => ctx.meta().sheets.find((s) => s.properties.title === title)?.properties.sheetId;
@@ -42,26 +42,33 @@ export function createEditor(ctx) {
 
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-  // Throws (and refreshes the page) if the row changed in Sheets since the page showed it.
-  async function checkUnchanged(title, rowNumber) {
+  // Throws (and refreshes the page) if the row changed in Sheets since the page showed it. year: the
+  // parsed tab the entry came from (its values as read then): a sync may have re-read the tab meanwhile
+  // (and moved rows) while a popup or question about this entry was open.
+  async function checkUnchanged(year, rowNumber) {
+    const { title } = year;
     const fresh = await freshValues(title);
-    if (!same(rowCells(ctx.cached(title).values, rowNumber), rowCells(fresh, rowNumber))) {
+    if (!same(rowCells(year.values, rowNumber), rowCells(fresh, rowNumber))) {
       await ctx.refresh([title]);
       throw new Error('This entry was changed in Google Sheets in the meantime. Nothing was saved; the page now shows the new values.');
     }
     return fresh;
   }
 
-  // cells: [[column, value]]; null or '' empties the cell. Values are written exactly (RAW).
+  // cells: [[column, value]]; null or '' empties the cell. Values are written exactly (RAW); formulas
+  // (text starting with "=", from a row read as formulas when moving an entry) stay formulas.
   async function writeCells(title, rowNumber, cells) {
     const writes = [];
+    const formulas = [];
     const clears = [];
     for (const [column, value] of cells) {
       const range = cellRange(title, rowNumber, column);
       if (value === null || value === '') clears.push(range);
+      else if (typeof value === 'string' && value.startsWith('=')) formulas.push({ range, values: [[value]] });
       else writes.push({ range, values: [[value]] });
     }
     if (writes.length) await ctx.api.batchUpdateValues(id(), writes, 'RAW');
+    if (formulas.length) await ctx.api.batchUpdateValues(id(), formulas, 'USER_ENTERED');
     if (clears.length) await ctx.api.batchClearValues(id(), clears);
   }
 
@@ -128,10 +135,13 @@ export function createEditor(ctx) {
     const title = year.title;
     const target = iso.slice(0, 4);
     await change([title, target], async () => {
-      const fresh = await checkUnchanged(title, entry.rowNumber);
+      const fresh = await checkUnchanged(year, entry.rowNumber);
       const [aboveRow, before] = await snapshot(title, entry.rowNumber - 1, entry.rowNumber);
       const op = { kind: 'edit', fromTitle: title, toTitle: target, from: before, row: entry.rowNumber };
-      if (target === title && staysInPlace(year, entry, iso)) {
+      // Neighbours as they are now (rows around it may have changed since the page showed them).
+      const now = parseYearTab(title, fresh);
+      const current = now.entries.find((e) => e.rowNumber === entry.rowNumber);
+      if (target === title && current && staysInPlace(now, current, iso)) {
         await writeCells(title, entry.rowNumber, [[DATE_COLUMN, isoToSerial(iso)]]);
         const to = [...before];
         to[DATE_COLUMN] = isoToSerial(iso);
@@ -147,7 +157,8 @@ export function createEditor(ctx) {
       }))) return;
 
       // Add at the new place first, then remove the old row: if anything fails, nothing is lost.
-      const values = rowCells(fresh, entry.rowNumber);
+      // A..I as Sheets has them, formulas as formulas (e.g. an amount typed as =12.40+3.60).
+      const values = Array.from({ length: INPUT_COLUMNS }, (_, c) => before[c] ?? '');
       values[DATE_COLUMN] = isoToSerial(iso);
       const placed = await addRow(target, iso, values);
       let oldRow = entry.rowNumber;
@@ -172,7 +183,7 @@ export function createEditor(ctx) {
     const what = [entry.date ? isoToBg(entry.date) : null, entry.category, entry.description, amounts.join(', ')].filter(Boolean).join(' · ');
     if (!(await confirmDialog({ title: 'Delete this entry?', message: [what || '(empty entry)', 'Its row will be removed from Google Sheets.'], confirm: 'Delete' }))) return;
     await change([year.title], async () => {
-      const fresh = await checkUnchanged(year.title, entry.rowNumber);
+      const fresh = await checkUnchanged(year, entry.rowNumber);
       const extra = (fresh[entry.rowNumber - 1] || []).slice(INPUT_COLUMNS).some((v) => v !== '' && v !== null);
       if (extra && !(await confirmDialog({
         title: 'Delete the whole row?',
@@ -221,7 +232,7 @@ export function createEditor(ctx) {
 
   async function setCells(year, entry, cells) {
     await change([year.title], async () => {
-      await checkUnchanged(year.title, entry.rowNumber);
+      await checkUnchanged(year, entry.rowNumber);
       const [before] = await snapshot(year.title, entry.rowNumber, entry.rowNumber);
       await writeCells(year.title, entry.rowNumber, cells);
       const after = [...before];
@@ -234,7 +245,7 @@ export function createEditor(ctx) {
   async function insertEmpty(year, row, iso) {
     await change([year.title], async () => {
       const fresh = await freshValues(year.title);
-      const shown = ctx.cached(year.title).values;
+      const shown = year.values; // (As the page showed them when the menu or swipe was opened.)
       // The rows on both sides must still be where the page shows them.
       if (!same(rowCells(shown, row - 1), rowCells(fresh, row - 1)) || !same(rowCells(shown, row), rowCells(fresh, row))) {
         await ctx.refresh([year.title]);

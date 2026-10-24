@@ -301,8 +301,6 @@ export function setUpUndo({ labels, step, ready }) {
     event.preventDefault();
     run(key === 'z' && !event.shiftKey);
   });
-  // The other page of the app (another tab) may have changed the list.
-  window.addEventListener('storage', update);
   update();
   return update;
 }

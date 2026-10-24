@@ -225,6 +225,17 @@ export class PeriodPicker {
     return { from: `${first}-01-01`, to: `${last}-12-31`, kind: 'all', label: 'All time' };
   }
 
+  // "All time" covers the year tabs there are now (call when tabs were added or deleted, or when a saved
+  // period is restored). Returns true if the shown period changed (without calling onChange).
+  followYears() {
+    if (this.period.kind !== 'all') return false;
+    const all = this.allPeriod();
+    if (all.from === this.period.from && all.to === this.period.to) return false;
+    this.period = all;
+    this.updateButton();
+    return true;
+  }
+
   pickCustom(day) {
     if (!this.anchor) {
       this.anchor = day;

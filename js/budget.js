@@ -247,6 +247,7 @@ export function parseYearTab(title, values) {
   return {
     title,
     year,
+    values, // As read: what the page shows comes from these (editing checks against them).
     currency: currencyOf(year),
     layoutProblem,
     rows,
