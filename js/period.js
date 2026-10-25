@@ -40,12 +40,32 @@ function customPeriod(from, to, kind = 'days') {
 }
 
 // One step back (-1) or forward (+1), keeping the kind of period.
-function shift(period, direction) {
+export function shift(period, direction) {
   if (period.kind === 'month') return monthPeriod(addMonths(period.from, direction));
   if (period.kind === 'year') return yearPeriod(Number(period.from.slice(0, 4)) + direction);
   if (period.kind === 'week') return weekPeriod(addDays(period.from, 7 * direction));
   const length = daysBetween(period.from, period.to) + 1;
   return customPeriod(addDays(period.from, length * direction), addDays(period.to, length * direction));
+}
+
+// A period as URL parameters (the statistics page opens with the main page's period): from, to, kind.
+export function periodQuery(period) {
+  return new URLSearchParams({ from: period.from, to: period.to, kind: period.kind }).toString();
+}
+
+// The period given by periodQuery() parameters (with its label), or null if they don't make one.
+export function periodFromQuery(params) {
+  const from = params.get('from');
+  const to = params.get('to');
+  const iso = /^\d{4}-\d\d-\d\d$/;
+  if (!iso.test(from) || !iso.test(to) || from > to) return null;
+  switch (params.get('kind')) {
+    case 'month': return monthPeriod(from);
+    case 'year': return yearPeriod(Number(from.slice(0, 4)));
+    case 'week': return weekPeriod(from);
+    case 'all': return { from, to, kind: 'all', label: 'All time' }; // (followYears() fits it to the tabs.)
+    default: return customPeriod(from, to);
+  }
 }
 
 export class PeriodPicker {

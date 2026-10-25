@@ -36,6 +36,10 @@ const PATHS = {
   paste: '<path d="M9 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v13.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H15"/><rect x="9" y="2.5" width="6" height="4" rx="1" fill="currentColor"/><path d="M9 12h6M9 16h4"/>',
   eraser: '<path d="M7.5 20.5 3.3 16.3a1.5 1.5 0 0 1 0-2.1l9.9-9.9a1.5 1.5 0 0 1 2.1 0l5.4 5.4a1.5 1.5 0 0 1 0 2.1l-8.8 8.7z"/><path fill="currentColor" stroke="none" d="M3.3 16.3a1.5 1.5 0 0 1 0-2.1l4.6-4.6 7.5 7.5-3.9 3.4H7.5z"/><path d="M12 20.5h8.5"/>',
   trash: '<path d="M4 6.5h16M9.5 6.5V4h5v2.5"/><path d="M6 6.5 7 20a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13.5"/><path d="M10 10.5v6.5M14 10.5v6.5"/>',
+  // Statistics: three bars on a base line.
+  stats: '<g fill="currentColor" stroke="none"><rect x="4" y="11" width="4" height="8.5" rx="1"/><rect x="10" y="4" width="4" height="15.5" rx="1"/><rect x="16" y="8" width="4" height="11.5" rx="1"/></g><path d="M2.5 21h19"/>',
+  arrowUpSmall: '<path stroke-width="2.4" d="M12 19V5M6 11l6-6 6 6"/>',
+  arrowDownSmall: '<path stroke-width="2.4" d="M12 5v14M6 13l6 6 6-6"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   collapse: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
   // Categories. One colour only; fills (F = fill="currentColor" stroke="none") where they make a shape easier to recognise.

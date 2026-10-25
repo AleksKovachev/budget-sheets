@@ -43,6 +43,26 @@ export function toEur(amount, year) {
   return year >= EURO_FROM_YEAR ? amount : amount / BGN_PER_EUR;
 }
 
+// An amount from the `year` tab in the given currency ('EUR' or 'BGN'), at the fixed rate.
+export function convert(amount, year, currency) {
+  if (currency === currencyOf(year)) return amount;
+  return currency === 'EUR' ? amount / BGN_PER_EUR : amount * BGN_PER_EUR;
+}
+
+// What an entry cost each person, in its tab's currency: { [person key]: amount, combined: amount }.
+// A person's part: their own personal amounts, half of every shared amount (paid − personal, whoever paid),
+// and the other's cash in (money the other paid only for them). Together: everything paid plus cash in.
+export function spending(entry) {
+  const shared = PEOPLE.reduce((sum, p) => sum + entry.money[p.key].paid - entry.money[p.key].personal, 0);
+  const result = { combined: 0 };
+  for (const person of PEOPLE) {
+    const other = PEOPLE.find((p) => p !== person);
+    result[person.key] = entry.money[person.key].personal + shared / 2 + entry.money[other.key].cashIn;
+    result.combined += result[person.key];
+  }
+  return result;
+}
+
 function isEmpty(value) {
   return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
 }

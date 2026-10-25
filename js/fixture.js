@@ -1,12 +1,16 @@
 // Development only: serves private/fixture.json (made by tools/xlsx_to_fixture.py) in place of the
-// Sheets API, so the UI can be checked without signing in. Enabled with ?fixture on localhost.
+// Sheets API, so the UI can be checked without signing in. Always used on the local dev server
+// (Google sign-in isn't set up for it); ?real tries the real sign-in there instead.
 // Writes change an in-memory copy only (lost on reload). window.__fixtureSet() simulates an edit
 // made directly in Google Sheets, to test syncing.
 
 import { serialToBg, isoToSerial } from './dates.js';
 
+const LIVE_APP = 'https://alekskovachev.github.io/budget-sheets/';
+
 export function fixtureRequested() {
-  return location.hostname === 'localhost' && new URLSearchParams(location.search).has('fixture');
+  const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  return local && !new URLSearchParams(location.search).has('real');
 }
 
 // A striped bar at the very top, so test data is never mistaken for the real spreadsheet.
@@ -15,8 +19,8 @@ export function showFixtureBanner() {
   bar.className = 'fixture-banner';
   bar.textContent = 'TEST DATA from the exported .xlsx – not your Google Sheet. Changes stay in this tab and are lost on reload.';
   const link = document.createElement('a');
-  link.href = location.pathname.split('/').pop() || 'index.html';
-  link.textContent = 'Open the real sheet';
+  link.href = LIVE_APP + (location.pathname.split('/').pop() || '');
+  link.textContent = 'Open the live app';
   bar.append(' ', link);
   document.body.prepend(bar);
 }

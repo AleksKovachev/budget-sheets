@@ -10,4 +10,4 @@ keeps working on its own exactly as before.
 
 Setup: [SETUP.md](SETUP.md) · Spreadsheet layout and the rules the app follows: [SHEET_LAYOUT.md](SHEET_LAYOUT.md)
 
-Run locally: `python serve.py`, then open http://localhost:8000.
+Run locally: `python serve.py`, then open http://localhost:8000 (test data, no sign-in; see SETUP.md).

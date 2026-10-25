@@ -408,6 +408,99 @@ function setUpIdleWarning() {
   setInterval(update, 500);
 }
 
+// ---- Tooltips: the app's own instead of the browser's, so they all look the same (bigger, rounded) ----
+// Every title attribute becomes data-tip as soon as it is set, so the browser shows none of its own.
+// Pointing at an element with the mouse shows its data-tip after a moment; on phones, pressing and holding
+// does (setUpTouchTips).
+
+function moveTitle(node) {
+  const text = node.getAttribute?.('title');
+  if (text === null || text === undefined) return;
+  node.removeAttribute('title');
+  if (text) node.dataset.tip = text;
+  else delete node.dataset.tip;
+}
+
+// Shows `node` at the mouse pointer (x, y), like the browser's own tooltips: just below and right of it,
+// or above it when there's no room below; always inside the screen. Fixed position; placed inside the
+// anchor's dialog when there is one, so it shows above the dialog.
+function placeAtPointer(node, anchor, x, y) {
+  const container = anchor.closest('dialog') || document.body;
+  node.classList.add('floating');
+  container.append(node);
+  const viewWidth = document.documentElement.clientWidth;
+  const viewHeight = window.innerHeight;
+  const width = Math.min(node.offsetWidth, viewWidth - 16);
+  const height = node.offsetHeight;
+  const below = y + 22 + height <= viewHeight - 8;
+  node.style.left = `${Math.max(8, Math.min(x + 4, viewWidth - width - 8))}px`;
+  node.style.top = `${Math.max(8, below ? y + 22 : y - height - 10)}px`;
+}
+
+function setUpTooltips() {
+  let tip = null;
+  let shownFor = null; // Element whose tooltip is shown.
+  let hovered = null; // Element with a tooltip under the mouse (shown, or waiting to be).
+  let timer = 0;
+  let pointer = { x: 0, y: 0 };
+  const hide = () => {
+    clearTimeout(timer);
+    tip?.remove();
+    tip = null;
+    shownFor = null;
+  };
+  const show = (target) => {
+    if (!target.isConnected || !target.dataset.tip || target !== hovered) return;
+    tip = el('div', 'tooltip', target.dataset.tip);
+    tip.setAttribute('role', 'tooltip');
+    placeAtPointer(tip, target, pointer.x, pointer.y);
+    shownFor = target;
+  };
+
+  for (const node of document.querySelectorAll('[title]')) moveTitle(node);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'attributes') moveTitle(record.target);
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        moveTitle(node);
+        node.querySelectorAll('[title]').forEach(moveTitle);
+      }
+    }
+    // The element was redrawn (gone), or its text changed (e.g. the sync countdown's).
+    if (shownFor && !shownFor.isConnected) hide();
+    else if (shownFor && tip.textContent !== (shownFor.dataset.tip || '')) {
+      if (shownFor.dataset.tip) tip.textContent = shownFor.dataset.tip;
+      else hide();
+    }
+  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title'] });
+
+  // The tooltip follows the mouse while it is shown.
+  document.addEventListener('pointermove', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    pointer = { x: event.clientX, y: event.clientY };
+    if (tip) placeAtPointer(tip, shownFor, pointer.x, pointer.y);
+  }, { capture: true, passive: true });
+  document.addEventListener('pointerover', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    pointer = { x: event.clientX, y: event.clientY };
+    const target = event.target.closest?.('[data-tip]') || null;
+    if (target === hovered) return; // Still the same element (or still none).
+    // From one tooltip straight to the next: no waiting.
+    const quick = Boolean(tip);
+    hide();
+    hovered = target;
+    if (target) timer = setTimeout(() => show(target), quick ? 0 : 450);
+  });
+  document.addEventListener('pointerout', (event) => {
+    if (event.pointerType !== 'mouse' || event.relatedTarget) return;
+    hovered = null; // Left the window.
+    hide();
+  });
+  for (const type of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(type, hide, true);
+  window.addEventListener('scroll', hide, { capture: true, passive: true });
+}
+
 // ---- Tooltips by finger: press and hold a button (phones have no mouse to hover with) ----
 
 function setUpTouchTips() {
@@ -423,12 +516,12 @@ function setUpTouchTips() {
     hide();
     clearTimeout(timer);
     if (event.pointerType === 'mouse') return;
-    const target = event.target.closest?.('[title]');
+    const target = event.target.closest?.('[data-tip]');
     // Entry rows and the raw grid have their own press-and-hold menu.
-    if (!target || !target.title || target.closest('input, textarea, .entries .entry.editable, #grid')) return;
+    if (!target || !target.dataset.tip || target.closest('input, textarea, .entries .entry.editable, #grid')) return;
     start = { x: event.clientX, y: event.clientY };
     timer = setTimeout(() => {
-      tip = el('div', 'touch-tip', target.title);
+      tip = el('div', 'tooltip', target.dataset.tip);
       tip.setAttribute('role', 'tooltip');
       placeFloating(tip, target);
       shownAt = Date.now();
@@ -498,6 +591,7 @@ export function setUpPage() {
   setUpPin();
   setUpBackToTop();
   setUpPhoneSwitch();
+  setUpTooltips();
   setUpTouchTips();
   setUpSheetsLink();
   setUpIdleWarning();

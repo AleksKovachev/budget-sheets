@@ -1,0 +1,976 @@
+// Statistics page: how much was spent, by whom and on what, in a chosen period.
+// Opened from the main page with its period (stats.html?from=…&to=…&kind=…; a month card passes its month).
+// One row of choices above the widgets: period, whose spending (both together or one person's part, see
+// budget.js spending()), how a period that isn't over yet is compared, and currency (lev ↔ euro at the
+// fixed rate). Read-only; kept in sync like the other pages.
+//
+// Comparisons:
+//   Last period – the period just before (September for October, 2025 for 2026).
+//   Usual       – the average of the same period in the earlier years with data (October 2022–2025).
+//   While the shown period isn't over, "Up to today" compares only as many days of each (1–25 October with
+//   1–25 September); "Whole periods" compares with them in full.
+
+import { isConfigured, initAuth, signIn, dropToken, getAccessToken, watchIdle, IDLE_MS } from './auth.js';
+import { ApiError, quoteTab, getSpreadsheet, batchGetValues, spreadsheetUrl } from './sheets.js';
+import { isYearTab, parseYearTab, spending, convert } from './budget.js';
+import { isoToBg } from './dates.js';
+import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.js';
+import {
+  storage, SHEET_KEY,
+} from './storage.js';
+import { $, el, showError, setUpPage, withLoading, showSessionBanner, touchInput } from './ui.js';
+import { icon, categoryIcon } from './icons.js';
+import { startSync, PAST_YEARS_MS } from './sync.js';
+import { PeriodPicker, monthPeriod, yearPeriod, todayIso, shift, periodQuery, periodFromQuery } from './period.js';
+import { addDays, addMonths, daysBetween, monthStart, monthTitle, weekStart, shortMonth, toIso } from './calendar.js';
+import { PEOPLE, BGN_PER_EUR, categoryKey, categoryStyle, CHART_COLOURS, OTHER_CHART_COLOUR } from './config.js';
+import { gauge, donut, stackedColumns } from './charts.js';
+
+const VIEWS = ['view-message', 'view-signin', 'view-stats'];
+const WHO = [{ key: 'combined', name: 'Combined' }, ...PEOPLE];
+const META_INTERVAL_MS = 30_000;
+
+let api = { getSpreadsheet, batchGetValues };
+let fixture = false;
+let spreadsheetId = null;
+let meta = null;
+let yearTitles = []; // Newest first.
+let picker = null;
+let sync = null;
+let busy = false; // Reading from Google Sheets; syncing waits.
+let metaReadAt = 0;
+// Years read so far: title -> { parsed, signature, fetchedAt }.
+const cache = new Map();
+
+// The switches start at their defaults every time the page opens (they're not remembered).
+let currency = 'EUR';
+let who = 'combined';
+let compareMode = 'today'; // 'today' (up to today) | 'whole' (whole periods)
+let gaugeBase = 'last'; // What the gauges compare with: 'last' | 'usual'
+let detailIndex = null; // Columns: 0, 1 or 2 (most detailed first); null: the most detailed that fits.
+
+function show(view) {
+  for (const v of VIEWS) $(v).hidden = v !== view;
+}
+
+function showMessage(text) {
+  $('message-text').textContent = text;
+  show('view-message');
+}
+
+async function run(action, { overlay = true } = {}) {
+  if (overlay) showError(null);
+  try {
+    await (overlay ? withLoading(action) : action());
+  } catch (err) {
+    if (err.status === 401) {
+      dropToken();
+      // With the statistics on screen, keep them and ask to sign in again; otherwise show the sign-in card.
+      if (sync) showSessionBanner(sync.renew);
+      else showSignIn(false);
+      return;
+    }
+    if (err instanceof ApiError && err.status === 403) {
+      showError(new Error('This Google account has no access to that spreadsheet.'));
+    } else {
+      showError(err);
+    }
+    console.error(err);
+  }
+}
+
+async function start() {
+  setUpPage();
+  setUpChoices();
+  fixture = fixtureRequested();
+  if (fixture) {
+    showFixtureBanner();
+    await run(async () => {
+      api = await loadFixtureApi();
+      spreadsheetId = 'fixture';
+      await open();
+    });
+    return;
+  }
+  if (!isConfigured()) {
+    showMessage('No Google client ID is configured yet (see SETUP.md).');
+    return;
+  }
+  let ended;
+  try {
+    ended = await initAuth();
+  } catch (err) {
+    showMessage(err.message);
+    return;
+  }
+  // (The default spreadsheet is opened, and remembered, by the main page.)
+  spreadsheetId = storage.local.get(SHEET_KEY);
+  if (!spreadsheetId) {
+    showMessage('No spreadsheet has been chosen yet. Open the main page (Budget Sheets, top left) first.');
+    return;
+  }
+  watchIdle((idle) => {
+    sync?.pause();
+    picker?.close();
+    showError(null);
+    showSignIn(idle);
+  });
+  if (getAccessToken()) await run(open);
+  else showSignIn(ended === 'idle');
+}
+
+function showSignIn(idle) {
+  $('signin-note').hidden = !idle;
+  $('signin-note').textContent = idle ? `Signed out after ${IDLE_MS / 60_000} minutes without use.` : '';
+  show('view-signin');
+}
+
+async function open() {
+  meta = await api.getSpreadsheet(spreadsheetId);
+  metaReadAt = Date.now();
+  readYearTitles();
+  if (!yearTitles.length) throw new Error('This spreadsheet has no year tabs (tabs named like "2026").');
+  $('btn-sheets').href = fixture ? '#' : spreadsheetUrl(spreadsheetId);
+  show('view-stats');
+  if (!picker) {
+    picker = new PeriodPicker({
+      years: () => yearTitles.map(Number),
+      period: periodFromQuery(new URLSearchParams(location.search)) || monthPeriod(todayIso()),
+      onChange: (period) => {
+        rememberPeriod(period);
+        showChoices();
+        run(() => load(period));
+      },
+    });
+  }
+  picker.followYears(); // ("All time" covers the year tabs there are.)
+  rememberPeriod(picker.period);
+  showChoices();
+  await load(picker.period);
+  sync?.resume();
+  sync ??= startSync(syncNow, { offline: fixture });
+}
+
+// The period stays in the address, so reloading the page (or going back to it) shows it again.
+function rememberPeriod(period) {
+  history.replaceState(null, '', `stats.html?${periodQuery(period)}`);
+}
+
+function readYearTitles() {
+  yearTitles = meta.sheets.map((s) => s.properties.title).filter(isYearTab).sort((a, b) => b.localeCompare(a));
+}
+
+// Re-reads the tab list (year tabs can be added or deleted in Google Sheets). Returns true if it changed.
+async function reloadMeta() {
+  meta = await api.getSpreadsheet(spreadsheetId);
+  metaReadAt = Date.now();
+  const before = yearTitles.join();
+  readYearTitles();
+  for (const title of cache.keys()) if (!yearTitles.includes(title)) cache.delete(title);
+  if (yearTitles.join() === before) return false;
+  picker.followYears();
+  return true;
+}
+
+// ---- Data ----
+
+// The period's years and every earlier one (the usual amounts come from all earlier years).
+function titlesFor(period) {
+  return yearTitles.filter((t) => t <= period.to.slice(0, 4));
+}
+
+// Reads the given year tabs; returns the titles whose content changed.
+async function fetchYears(titles) {
+  if (!titles.length) return [];
+  const result = await api.batchGetValues(spreadsheetId, titles.map(quoteTab), 'UNFORMATTED_VALUE');
+  const changed = [];
+  titles.forEach((title, i) => {
+    const values = result.valueRanges[i].values || [];
+    const signature = JSON.stringify(values);
+    const old = cache.get(title);
+    if (old?.signature === signature) {
+      old.fetchedAt = Date.now();
+    } else {
+      cache.set(title, { parsed: parseYearTab(title, values), signature, fetchedAt: Date.now() });
+      changed.push(title);
+    }
+  });
+  return changed;
+}
+
+async function load(period) {
+  busy = true;
+  try {
+    await fetchYears(titlesFor(period).filter((t) => !cache.has(t)));
+  } finally {
+    busy = false;
+  }
+  if (picker.period === period) render();
+}
+
+// The current year every time; older years once they're a minute old (they rarely change).
+async function syncNow() {
+  if (busy || !picker || $('view-stats').hidden) return false;
+  busy = true;
+  try {
+    let tabsChanged = Date.now() - metaReadAt >= META_INTERVAL_MS && (await reloadMeta());
+    const due = () => {
+      const now = Date.now();
+      return titlesFor(picker.period).filter((t) => t === yearTitles[0] || now - (cache.get(t)?.fetchedAt || 0) >= PAST_YEARS_MS);
+    };
+    let changed;
+    try {
+      changed = await fetchYears(due());
+    } catch (err) {
+      // A tab read a moment ago is gone ("Unable to parse range"): read the tab list and try once more.
+      if (!(err instanceof ApiError) || err.status !== 400) throw err;
+      tabsChanged = (await reloadMeta()) || tabsChanged;
+      changed = await fetchYears(due());
+    }
+    if (changed.length || tabsChanged) render();
+  } finally {
+    busy = false;
+  }
+  return true;
+}
+
+// Every entry of the read years as { date, key (category), name, amounts: { combined, <person>… } } in
+// the chosen currency. Carry-overs are left out (they move last year's balance, not spending).
+function spendingRows() {
+  const rows = [];
+  for (const title of titlesFor(picker.period)) {
+    const year = cache.get(title)?.parsed;
+    if (!year) continue;
+    for (const block of year.blocks) {
+      for (const entry of block.entries) {
+        // An entry whose date is text counts in its month.
+        const date = entry.date || (block.month ? `${block.month}-01` : null);
+        if (!date) continue;
+        const spent = spending(entry);
+        const amounts = {};
+        for (const [key, amount] of Object.entries(spent)) amounts[key] = convert(amount, year.year, currency);
+        rows.push({ date, key: categoryKey(entry.category), name: entry.category, amounts });
+      }
+    }
+  }
+  return rows;
+}
+
+const minIso = (a, b) => (a < b ? a : b);
+const maxIso = (a, b) => (a > b ? a : b);
+const between = (rows, from, to) => rows.filter((r) => r.date >= from && r.date <= to);
+const sum = (rows, key = who) => rows.reduce((total, r) => total + r.amounts[key], 0);
+
+// Sums for everyone ({ combined, <person>… }) over the dates from..to.
+function totals(rows, from, to) {
+  const inRange = between(rows, from, to);
+  return Object.fromEntries(WHO.map((w) => [w.key, sum(inRange, w.key)]));
+}
+
+// Per category: [{ key, name, value, colour }], largest first (categories that add up to nothing left out).
+function categoryTotals(rows) {
+  const byKey = new Map();
+  for (const row of rows) {
+    const item = byKey.get(row.key) || { key: row.key, name: '', value: 0 };
+    item.name ||= row.name.trim();
+    item.value += row.amounts[who];
+    byKey.set(row.key, item);
+  }
+  return [...byKey.values()]
+    .filter((c) => Math.abs(c.value) >= 0.005)
+    .map((c) => ({ ...c, name: c.name || 'No category', colour: CHART_COLOURS[c.key] || OTHER_CHART_COLOUR }))
+    .sort((a, b) => b.value - a.value);
+}
+
+// ---- Comparisons ----
+
+// Whether the period has started but isn't over (only then do "Up to today" and "Whole periods" differ).
+function ongoing(period) {
+  const today = todayIso();
+  return period.from <= today && today < period.to;
+}
+
+// The same day `n` years earlier (29 February becomes 1 March).
+function yearsEarlier(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return toIso(new Date(Date.UTC(y - n, m - 1, d)));
+}
+
+// The period `n` years before: the same month or year, otherwise the same dates.
+function periodYearsBefore(period, n) {
+  if (period.kind === 'month') return monthPeriod(yearsEarlier(period.from, n));
+  if (period.kind === 'year') return yearPeriod(Number(period.from.slice(0, 4)) - n);
+  const from = yearsEarlier(period.from, n);
+  return { from, to: addDays(from, daysBetween(period.from, period.to)), kind: period.kind };
+}
+
+// What the widgets compare (see the top of the file), for everyone at once:
+//   current  { from, to, totals }  the shown period (up to today, if that's chosen and it isn't over)
+//   days     how many of its days are compared (null: all of them)
+//   last     { from, to, totals } | null
+//   usual    { periods: [{ from, to }], totals (averages) } | null
+function comparisons(period, rows) {
+  const today = todayIso();
+  const cut = compareMode === 'today' && ongoing(period) ? daysBetween(period.from, today) + 1 : null;
+  const part = (p) => ({ from: p.from, to: cut ? minIso(p.to, addDays(p.from, cut - 1)) : p.to });
+  const withTotals = (range) => ({ ...range, totals: totals(rows, range.from, range.to) });
+  const current = withTotals(part(period));
+  if (period.kind === 'all' || period.from > today) return { current, days: cut, last: null, usual: null };
+
+  const firstDay = `${yearTitles.at(-1)}-01-01`; // Nothing is recorded before the oldest year tab.
+  const previous = shift(period, -1);
+  const last = previous.from >= firstDay ? withTotals(part(previous)) : null;
+  const earlier = [];
+  for (let n = 1; ; n++) {
+    const p = periodYearsBefore(period, n);
+    if (p.from < firstDay) break;
+    earlier.push(part(p));
+  }
+  let usual = null;
+  if (earlier.length) {
+    const each = earlier.map((r) => totals(rows, r.from, r.to));
+    usual = { periods: earlier, totals: Object.fromEntries(WHO.map((w) => [w.key, each.reduce((s, t) => s + t[w.key], 0) / each.length])) };
+  }
+  return { current, days: cut, last, usual };
+}
+
+// "October in 2022–2025", "2022–2025", "the same dates in 2025"
+function usualText(period, usual) {
+  const years = usual.periods.map((p) => Number(p.from.slice(0, 4)));
+  const span = years.length > 1 ? `${Math.min(...years)}–${Math.max(...years)}` : String(years[0]);
+  if (period.kind === 'month') return `${monthTitle(period.from).split(' ')[0]} in ${span}`;
+  if (period.kind === 'year') return span;
+  return `the same dates in ${span}`;
+}
+
+// "+12%" / "−8%" / "±0%" between two amounts, or null when there's nothing to compare with.
+function change(now, before) {
+  if (!(before > 0)) return null;
+  return Math.round(((now - before) / before) * 100);
+}
+
+// ---- Formatting ----
+
+const SYMBOL = { EUR: '€', BGN: 'лв' };
+
+function money(amount) {
+  const text = new Intl.NumberFormat('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  return `${text} ${SYMBOL[currency]}`;
+}
+
+// 1.57K €, 936 €, 17.7 €
+function compactMoney(amount) {
+  return `${compact(amount)} ${SYMBOL[currency]}`;
+}
+
+function compact(amount) {
+  // (en-US writes thousands as "K"; en-GB as "k".)
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 }).format(amount);
+}
+
+// 01.09 – 25.09.2026 (the year once when both days are in the same year)
+function rangeText(from, to) {
+  if (from === to) return isoToBg(from);
+  return from.slice(0, 4) === to.slice(0, 4) ? `${isoToBg(from).slice(0, 5)} – ${isoToBg(to)}` : `${isoToBg(from)} – ${isoToBg(to)}`;
+}
+
+function percent(part, whole) {
+  return `${Math.round((part / whole) * 100)}%`;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// The selected person's name in their colour, or "Combined".
+function whoLabel(key = who) {
+  const person = PEOPLE.find((p) => p.key === key);
+  return person ? el('span', `pname person-${person.key}`, person.name) : document.createTextNode('Combined');
+}
+
+// Whose spending a widget shows (next to its title).
+function whoTag() {
+  const tag = el('span', 'widget-who');
+  tag.append(whoLabel());
+  return tag;
+}
+
+function widgetHead(title, ...tools) {
+  const head = el('div', 'widget-head');
+  head.append(el('h3', null, title), ...tools);
+  return head;
+}
+
+// A category's badge (its icon in the sheet's colour), ringed in its chart colour.
+function categoryBadge(category, className = 'cat-badge small') {
+  const badge = el('span', `${className} chart-ring`);
+  const style = categoryStyle(category.name);
+  if (style) {
+    badge.style.setProperty('--cat', style.badge);
+    badge.style.setProperty('--cat-ink', style.ink);
+  }
+  badge.style.setProperty('--c-light', category.colour[0]);
+  badge.style.setProperty('--c-dark', category.colour[1]);
+  badge.append(categoryIcon(style));
+  return badge;
+}
+
+// A small switch of a few choices (like the person switch): [[value, label]…].
+function segmented(choices, current, onPick, label) {
+  const group = el('div', 'seg seg-inline seg-small');
+  group.setAttribute('role', 'radiogroup');
+  group.setAttribute('aria-label', label);
+  for (const [value, text] of choices) {
+    const item = el('button', `seg-item${value === current ? ' active' : ''}`, text);
+    item.type = 'button';
+    item.setAttribute('role', 'radio');
+    item.setAttribute('aria-checked', String(value === current));
+    item.addEventListener('click', () => onPick(value));
+    group.append(item);
+  }
+  return group;
+}
+
+// ---- Choices: whose spending, comparing, currency ----
+
+function setUpChoices() {
+  const group = $('person');
+  for (const w of WHO) {
+    const item = el('button', `seg-item${w.key === 'combined' ? '' : ` person-${w.key}`}`, w.name);
+    item.type = 'button';
+    item.dataset.key = w.key;
+    item.setAttribute('role', 'radio');
+    item.addEventListener('click', () => {
+      who = w.key;
+      choiceChanged();
+    });
+    group.append(item);
+  }
+  $('btn-compare').addEventListener('click', () => {
+    compareMode = compareMode === 'today' ? 'whole' : 'today';
+    choiceChanged();
+  });
+  $('btn-currency').addEventListener('click', () => {
+    currency = currency === 'EUR' ? 'BGN' : 'EUR';
+    choiceChanged();
+  });
+  showChoices();
+}
+
+function choiceChanged() {
+  showChoices();
+  if (picker && cache.size) render();
+}
+
+function showChoices() {
+  for (const item of $('person').children) {
+    const active = item.dataset.key === who;
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-checked', String(active));
+  }
+
+  const compare = $('btn-compare');
+  const toToday = compareMode === 'today';
+  compare.replaceChildren(icon('calendar'), el('span', null, toToday ? 'Up to today' : 'Whole periods'));
+  // Only a period that isn't over yet can be compared either way.
+  compare.disabled = Boolean(picker) && !ongoing(picker.period);
+  compare.title = compare.disabled
+    ? 'This period is over, so it is compared with whole periods.'
+    : toToday
+      ? 'This period isn\'t over yet: it is compared with as many days of the others. Click to compare with them in full.'
+      : 'This period isn\'t over yet, and it is compared with the others in full. Click to compare only as many days of them.';
+  compare.setAttribute('aria-label', compare.title);
+
+  const button = $('btn-currency');
+  const euro = currency === 'EUR';
+  button.replaceChildren(el('span', 'currency-code', currency));
+  button.title = `Amounts in ${euro ? 'euro (EUR)' : 'leva (BGN)'}. Click for ${euro ? 'leva (BGN)' : 'euro (EUR)'}; 1 EUR = ${BGN_PER_EUR} BGN.`;
+  button.setAttribute('aria-label', button.title);
+}
+
+// ---- Widgets ----
+
+function render() {
+  const period = picker.period;
+  const rows = spendingRows();
+  const compared = comparisons(period, rows);
+  renderDashboard(period, compared);
+  renderCategories(period, rows, compared);
+  renderTimeline(period, rows);
+  $('stats-note').textContent = 'How amounts are counted: Combined is everything paid, including cash in. '
+    + "A person's part is their own personal amounts, half of every shared amount (paid minus personal, "
+    + "whoever paid it) and the other's cash in for them. Carry-overs from the year before are left out. "
+    + `Leva and euro are converted at the fixed rate 1 EUR = ${BGN_PER_EUR} BGN.`;
+}
+
+// Dashboard: one gauge each for both of you together and for each person, compared with the usual
+// amount or the last period (the switch in the card's header).
+function renderDashboard(period, compared) {
+  const box = $('w-dashboard');
+  const base = compared[gaugeBase];
+
+  const toggle = el('button', 'toggle-button small-toggle');
+  toggle.type = 'button';
+  toggle.append(el('span', 'muted', 'vs'), el('span', null, gaugeBase === 'usual' ? 'Usual' : 'Last period'));
+  toggle.title = gaugeBase === 'usual'
+    ? 'The gauges compare with the usual amount (the average of the same period in earlier years). Click to compare with the last period.'
+    : 'The gauges compare with the last period. Click to compare with the usual amount (the average of the same period in earlier years).';
+  toggle.title += ' Pointing at a gauge shows both.';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.addEventListener('click', () => {
+    gaugeBase = gaugeBase === 'usual' ? 'last' : 'usual';
+    renderDashboard(period, compared);
+  });
+
+  const gauges = el('div', 'gauges');
+  for (const w of WHO) {
+    const spent = compared.current.totals[w.key];
+    const before = base ? base.totals[w.key] : null;
+    const diff = before === null ? null : change(spent, before);
+    const item = el('div', 'gauge');
+    const label = el('div', 'gauge-label');
+    label.append(w.key === 'combined' ? 'Total spent' : whoLabel(w.key));
+    item.append(gauge(diff === null ? null : spent / before), label, el('div', 'gauge-value', compactMoney(spent)));
+    if (diff !== null) {
+      // (The line below says what it's compared with.)
+      const text = diff === 0 ? 'The same' : `${Math.abs(diff)}% ${diff > 0 ? 'above' : 'below'}`;
+      const caption = gaugeBase === 'usual' ? 'Usual' : 'Last period';
+      item.append(el('div', 'gauge-sub', text), el('div', 'gauge-sub muted', `${caption} ${compactMoney(before)}`));
+    }
+    // The tooltip compares with both, whichever the gauges show.
+    const lines = [`${w.key === 'combined' ? 'Total spent' : w.name}: ${money(spent)}`];
+    for (const [name, other] of [['Last period', compared.last], ['Usual', compared.usual]]) {
+      if (!other) continue;
+      const d = change(spent, other.totals[w.key]);
+      lines.push(`${name}: ${money(other.totals[w.key])}${d === null ? '' : ` (${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}%)`}`);
+    }
+    item.title = lines.join('\n');
+    gauges.append(item);
+  }
+
+  let note;
+  if (period.from > todayIso()) note = 'This period has not started yet.';
+  else if (!base) note = `There is no ${gaugeBase === 'usual' ? 'earlier year' : 'earlier period'} to compare with, so the gauges show no needle.`;
+  else if (gaugeBase === 'usual') note = `Usual: the average of ${usualText(period, base)}.`;
+  else note = `Last period: ${rangeText(base.from, base.to)}.`;
+  if (base && compared.days) note += ` Only the first ${plural(compared.days, 'day')} of each are compared, as this period isn't over yet.`;
+  if (base) note += ' Green: below 90%, orange: 90–110%, red: above 110%.';
+  box.replaceChildren(widgetHead('Dashboard', el('span', 'widget-spacer'), toggle), gauges, el('p', 'widget-note muted', note));
+}
+
+// Categories picked in the donut or the list (their amounts add up in the middle of the donut).
+let picked = new Set();
+// A click anywhere else lets go of them (the donut and the list stop their own clicks).
+let clearPicked = null;
+document.addEventListener('click', () => clearPicked?.());
+
+// Expenses by category for the whole period: a donut and the list, compared with the last period and the
+// usual amount.
+function renderCategories(period, rows, compared) {
+  const box = $('w-categories');
+  const current = between(rows, period.from, period.to);
+  const categories = categoryTotals(current);
+  const total = sum(current);
+
+  const top = el('div', 'cat-top');
+  const headline = el('div', 'cat-total');
+  headline.append(el('span', 'muted', period.label), el('strong', null, money(total)));
+  top.append(headline, comparisonLines(period, compared));
+
+  // The donut and the shares: only categories with spending (one made up of refunds is listed, not drawn).
+  const positive = categories.filter((c) => c.value > 0);
+  const positiveTotal = positive.reduce((s, c) => s + c.value, 0);
+  const { svg, segments } = donut(positive.map((c) => ({ key: c.key, value: c.value, colour: c.colour })));
+  const centre = el('div', 'donut-centre');
+  const ring = el('div', 'donut');
+  ring.append(svg, centre);
+
+  const list = el('ul', 'cat-list');
+  const items = new Map();
+  for (const c of categories) {
+    const li = el('li', 'cat-item');
+    li.tabIndex = 0;
+    const share = c.value > 0 ? percent(c.value, positiveTotal) : '';
+    li.append(categoryBadge(c), el('span', 'cat-name', c.name), el('span', 'cat-share muted', share), el('span', 'cat-amount', money(c.value)));
+    items.set(c.key, li);
+    list.append(li);
+  }
+
+  // Pointing at a category (while none is picked) previews it; clicking picks it, Ctrl+click (or a tap on
+  // a phone) adds it to the picked ones or takes it out again.
+  for (const key of [...picked]) if (!items.has(key)) picked.delete(key);
+  let preview = null;
+  const update = () => {
+    const keys = preview ? new Set([preview]) : picked;
+    const chosen = categories.filter((c) => keys.has(c.key));
+    for (const [k, path] of segments) path.classList.toggle('dim', keys.size > 0 && !keys.has(k));
+    for (const [k, li] of items) li.classList.toggle('active', picked.has(k));
+    const label = el('span', 'muted');
+    if (!chosen.length) {
+      label.textContent = categories.length ? 'All categories' : 'Nothing spent';
+      centre.replaceChildren(label, el('strong', null, compactMoney(total)));
+      return;
+    }
+    const value = chosen.reduce((s, c) => s + c.value, 0);
+    label.textContent = chosen.length === 1 ? chosen[0].name : `${chosen.length} categories`;
+    const share = value > 0 && positiveTotal > 0 ? percent(value, positiveTotal) : '';
+    centre.replaceChildren(label, el('strong', null, compactMoney(value)), el('span', 'muted', share));
+  };
+  const pick = (key, event) => {
+    if (event.ctrlKey || event.metaKey || touchInput()) {
+      if (picked.has(key)) picked.delete(key);
+      else picked.add(key);
+    } else {
+      picked = picked.size === 1 && picked.has(key) ? new Set() : new Set([key]);
+    }
+    preview = null;
+    update();
+  };
+  const endPreview = () => {
+    if (preview === null) return;
+    preview = null;
+    update();
+  };
+  const bind = (node, key) => {
+    node.addEventListener('pointerenter', (event) => {
+      if (event.pointerType !== 'mouse' || picked.size) return;
+      preview = key;
+      update();
+    });
+    node.addEventListener('pointerleave', endPreview);
+    node.addEventListener('click', (event) => {
+      event.stopPropagation();
+      pick(key, event);
+    });
+    node.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      pick(key, event);
+    });
+  };
+  for (const [key, li] of items) bind(li, key);
+  for (const [key, path] of segments) bind(path, key);
+  // A press that turns into dragging gets no pointerleave: end the preview anyway.
+  for (const type of ['pointercancel', 'pointerleave']) ring.addEventListener(type, endPreview);
+  ring.addEventListener('dragstart', (event) => event.preventDefault());
+  clearPicked = () => {
+    if (!picked.size) return;
+    picked = new Set();
+    update();
+  };
+  update();
+
+  box.replaceChildren(widgetHead('Expenses by category', whoTag()), top, ring, list);
+}
+
+// Lines like "vs 01.09 – 25.09.2026  ↑ +12%" for the last period and the usual amount.
+function comparisonLines(period, compared) {
+  const box = el('div', 'cat-compare');
+  const now = compared.current.totals[who];
+  const line = (label, before, title) => {
+    const row = el('div', 'compare-line');
+    row.title = title;
+    const diff = change(now, before);
+    const delta = el('span', `delta${diff > 0 ? ' delta-up' : diff < 0 ? ' delta-down' : ''}`);
+    if (diff === null) {
+      delta.textContent = 'nothing then';
+    } else {
+      if (diff) delta.append(icon(diff > 0 ? 'arrowUpSmall' : 'arrowDownSmall'));
+      delta.append(`${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${Math.abs(diff)}%`);
+    }
+    row.append(el('span', 'muted', label), delta);
+    box.append(row);
+  };
+  const days = compared.days ? ` (the first ${plural(compared.days, 'day')} of each)` : '';
+  if (compared.last) {
+    const { from, to, totals: t } = compared.last;
+    line(`vs ${rangeText(from, to)}`, t[who], `Last period: ${money(t[who])} then, ${money(now)} now${days}.`);
+  }
+  if (compared.usual) {
+    const u = compared.usual.totals[who];
+    line('vs usual', u, `Usual: ${money(u)}, the average of ${usualText(period, compared.usual)}${days}. Now: ${money(now)}.`);
+  }
+  return box;
+}
+
+// ---- Expenses over time: stacked columns per sub-period, as detailed as picked ----
+
+const UNIT_NAMES = { day: 'Day', week: 'Week', '2weeks': '2 weeks', month: 'Month', quarter: 'Quarter', year: 'Year' };
+const UNIT_TEXT = {
+  day: 'Per day',
+  week: 'Per week (Monday to Sunday)',
+  '2weeks': 'Per two weeks (from a Monday)',
+  month: 'Per month',
+  quarter: 'Per quarter',
+  year: 'Per year',
+};
+const pad = (n) => String(n).padStart(2, '0');
+
+// The three levels of detail offered for a period, most detailed first.
+function unitChoices(period) {
+  const days = daysBetween(period.from, period.to) + 1;
+  if (days <= 31) return ['day', 'week', '2weeks'];
+  if (days <= 366) return ['week', '2weeks', 'month'];
+  return ['month', 'quarter', 'year'];
+}
+
+function unitStart(iso, unit) {
+  if (unit === 'day') return iso;
+  if (unit === 'week' || unit === '2weeks') return weekStart(iso);
+  if (unit === 'month') return monthStart(iso);
+  if (unit === 'quarter') return `${iso.slice(0, 4)}-${pad(Math.floor((Number(iso.slice(5, 7)) - 1) / 3) * 3 + 1)}-01`;
+  return `${iso.slice(0, 4)}-01-01`;
+}
+
+function nextStart(start, unit) {
+  if (unit === 'day') return addDays(start, 1);
+  if (unit === 'week') return addDays(start, 7);
+  if (unit === '2weeks') return addDays(start, 14);
+  return addMonths(start, { month: 1, quarter: 3, year: 12 }[unit]);
+}
+
+// Sub-periods of `unit` covering the period (the first and last cut to it).
+function makeBins(period, unit) {
+  const bins = [];
+  for (let s = unitStart(period.from, unit); s <= period.to; s = nextStart(s, unit)) {
+    bins.push({ from: maxIso(s, period.from), to: minIso(addDays(nextStart(s, unit), -1), period.to), start: s });
+  }
+  return bins;
+}
+
+function binLabels(bin, unit, manyYears) {
+  const [y, m, d] = bin.start.split('-');
+  const yy = `'${y.slice(2)}`;
+  switch (unit) {
+    case 'day': return { axis: `${Number(d)} ${shortMonth(bin.start)}`, title: isoToBg(bin.from) };
+    case 'week':
+    case '2weeks': return { axis: `${Number(bin.from.slice(8))} ${shortMonth(bin.from)}`, title: rangeText(bin.from, bin.to) };
+    case 'month': return { axis: manyYears ? `${shortMonth(bin.start)} ${yy}` : shortMonth(bin.start), title: monthTitle(bin.start) };
+    case 'quarter': {
+      const q = `Q${Math.floor((Number(m) - 1) / 3) + 1}`;
+      return { axis: manyYears ? `${q} ${yy}` : q, title: `${q} ${y} (${rangeText(bin.from, bin.to)})` };
+    }
+    default: return { axis: y, title: y };
+  }
+}
+
+// Narrowest column (with its gap) before the chart scrolls sideways; wider for fingers.
+const minSlot = () => (window.matchMedia('(pointer: coarse)').matches ? 14 : 8);
+
+let timelineTable = false; // Shown as a table instead of the chart.
+let timelineWidth = 0;
+let timelineData = null; // { period, rows } of the last render, for redrawing at another width.
+
+// The level of detail: the one picked (detailIndex), otherwise the most detailed that fits the width.
+function chosenUnit(period, width) {
+  const choices = unitChoices(period);
+  if (detailIndex !== null) return choices[detailIndex];
+  return choices.find((u) => makeBins(period, u).length * minSlot() <= width - 50) || choices.at(-1);
+}
+
+function renderTimeline(period, rows) {
+  timelineData = { period, rows };
+  const box = $('w-timeline');
+  const host = el('div', 'timeline-host');
+  const toggle = el('button', `icon-button${timelineTable ? ' active' : ''}`);
+  toggle.type = 'button';
+  toggle.append(icon('table'));
+  toggle.title = timelineTable ? 'Show as a chart' : 'Show as a table';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.setAttribute('aria-pressed', String(timelineTable));
+  toggle.addEventListener('click', () => {
+    timelineTable = !timelineTable;
+    renderTimeline(period, rows);
+  });
+  // The level of detail sits in the header, left of the table switch (drawTimeline fills it).
+  const detail = el('span', 'timeline-detail');
+  box.replaceChildren(widgetHead('Expenses over time', whoTag(), detail, toggle), el('div', 'widget-sub muted timeline-unit'), host);
+  timelineWidth = host.clientWidth;
+  drawTimeline(host, period, rows);
+}
+
+// The dates the columns cover: the period, but one that isn't over yet only up to today (or up to its
+// latest entry, if one is dated later), so the columns use the whole width.
+function shownRange(period, rows) {
+  const today = todayIso();
+  if (!ongoing(period)) return period;
+  const latest = rows.reduce((last, r) => maxIso(last, r.date), today);
+  return { ...period, to: minIso(period.to, latest) };
+}
+
+function drawTimeline(host, period, rows) {
+  const width = host.clientWidth;
+  const current = between(rows, period.from, period.to);
+  const range = shownRange(period, current);
+  const unit = chosenUnit(range, width);
+  const choices = unitChoices(range);
+  const box = host.parentElement;
+  box.querySelector('.timeline-detail').replaceChildren(segmented(choices.map((u) => [u, UNIT_NAMES[u]]), unit, (u) => {
+    detailIndex = choices.indexOf(u);
+    drawTimeline(host, period, rows);
+  }, 'How detailed'));
+  box.querySelector('.timeline-unit').textContent = UNIT_TEXT[unit] + (range.to !== period.to ? `, up to ${isoToBg(range.to)}` : '');
+
+  const categories = categoryTotals(current);
+  if (!categories.length) {
+    host.replaceChildren(el('p', 'widget-empty muted', 'Nothing spent in this period.'));
+    return;
+  }
+  const bins = makeBins(range, unit);
+  const manyYears = range.from.slice(0, 4) !== range.to.slice(0, 4);
+  for (const bin of bins) {
+    Object.assign(bin, binLabels(bin, unit, manyYears));
+    bin.values = new Map();
+    for (const row of between(current, bin.from, bin.to)) bin.values.set(row.key, (bin.values.get(row.key) || 0) + row.amounts[who]);
+    bin.total = [...bin.values.values()].reduce((s, v) => s + v, 0);
+  }
+
+  if (timelineTable) {
+    host.replaceChildren(timelineTableView(bins, categories));
+    return;
+  }
+
+  const height = window.matchMedia('(max-width: 600px)').matches ? 210 : 260;
+  const chart = stackedColumns({
+    width, height, bins: bins.map((b) => ({ label: b.axis, values: b.values })), categories, axisText: compact, minSlot: minSlot(),
+  });
+  // The value axis stays put; the columns scroll sideways when they don't fit.
+  const frame = el('div', 'timeline-chart');
+  const scroller = el('div', `timeline-scroll${chart.scrolls ? ' scrolls' : ''}`);
+  scroller.tabIndex = 0;
+  scroller.setAttribute('role', 'img');
+  scroller.setAttribute('aria-label', `Expenses ${UNIT_TEXT[unit].toLowerCase()}; the table view lists every amount.`);
+  scroller.append(chart.plot);
+  const tip = el('div', 'chart-tip');
+  tip.hidden = true;
+  frame.append(chart.axis, scroller, tip);
+
+  let tipBin = null; // Bin shown in the tooltip.
+  const showBin = (i) => {
+    tipBin = i;
+    chart.band(i);
+    if (i === null) {
+      tip.hidden = true;
+      return;
+    }
+    const bin = bins[i];
+    const parts = categories.map((c) => ({ c, v: bin.values.get(c.key) || 0 })).filter((p) => Math.abs(p.v) >= 0.005).sort((a, b) => b.v - a.v);
+    const totalLine = el('div', 'tip-total');
+    totalLine.append(el('strong', null, money(bin.total)));
+    tip.replaceChildren(el('div', 'tip-title', bin.title), totalLine);
+    if (parts.length) {
+      // Badge, name, amount: the amounts line up after the longest name.
+      const grid = el('div', 'tip-grid');
+      for (const { c, v } of parts) grid.append(categoryBadge(c, 'cat-badge tiny'), el('span', 'tip-name', c.name), el('span', 'tip-value', money(v)));
+      tip.append(grid);
+    } else {
+      tip.append(el('div', 'muted', 'Nothing spent'));
+    }
+    tip.hidden = false;
+    // Beside the column, on whichever side has room.
+    const x = chart.axis.width.baseVal.value + chart.centreOf(i) - scroller.scrollLeft;
+    const w = tip.offsetWidth;
+    const left = x + 14 + w <= frame.clientWidth ? x + 14 : x - 14 - w;
+    tip.style.left = `${Math.max(0, Math.min(left, frame.clientWidth - w))}px`;
+  };
+  const binFromEvent = (event) => chart.binAt(event.clientX - chart.plot.getBoundingClientRect().left);
+  // Mouse: follows the pointer; when the columns don't fit, dragging scrolls them (there's no scrollbar).
+  // Finger: a tap shows that column (it stays until a tap elsewhere); sliding sideways moves along the
+  // columns, unless they don't fit (then sliding scrolls them).
+  let drag = null; // { x, left, moved } while the mouse drags the columns.
+  scroller.addEventListener('pointermove', (event) => {
+    if (drag) {
+      const dx = event.clientX - drag.x;
+      if (Math.abs(dx) > 3 && !drag.moved) {
+        drag.moved = true;
+        showBin(null);
+      }
+      if (drag.moved) scroller.scrollLeft = drag.left - dx;
+      return;
+    }
+    if (event.pointerType === 'mouse' || (event.buttons && !chart.scrolls)) showBin(binFromEvent(event));
+  });
+  scroller.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    showBin(binFromEvent(event));
+    if (event.pointerType === 'mouse' && event.button === 0 && chart.scrolls) {
+      drag = { x: event.clientX, left: scroller.scrollLeft, moved: false };
+      try { scroller.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+      scroller.classList.add('dragging');
+    }
+  });
+  for (const type of ['pointerup', 'pointercancel']) {
+    scroller.addEventListener(type, () => {
+      drag = null;
+      scroller.classList.remove('dragging');
+    });
+  }
+  scroller.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse' && !drag) showBin(null);
+  });
+  scroller.addEventListener('scroll', () => showBin(null), { passive: true });
+  scroller.addEventListener('keydown', (event) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (step) {
+      event.preventDefault();
+      showBin(Math.min(bins.length - 1, Math.max(0, (tipBin ?? (step > 0 ? -1 : bins.length)) + step)));
+    } else if (event.key === 'Escape') {
+      showBin(null);
+    }
+  });
+  scroller.addEventListener('blur', () => showBin(null));
+  hideTimelineTip = () => showBin(null);
+
+  const legend = el('ul', 'chart-legend');
+  for (const c of categories) {
+    const item = el('li');
+    const swatch = el('span', 'legend-swatch series-bg');
+    swatch.style.setProperty('--c-light', c.colour[0]);
+    swatch.style.setProperty('--c-dark', c.colour[1]);
+    item.append(swatch, c.name);
+    legend.append(item);
+  }
+  host.replaceChildren(frame, legend);
+  // Columns that don't fit start at the newest ones while the period isn't over, otherwise at its start.
+  if (chart.scrolls && ongoing(period)) scroller.scrollLeft = scroller.scrollWidth;
+}
+
+// The same numbers as a table: one row per sub-period with spending, its categories largest first.
+function timelineTableView(bins, categories) {
+  const table = el('table', 'stats-table');
+  const head = table.createTHead().insertRow();
+  head.append(el('th', null, 'Period'), el('th', 'num', 'Total'), el('th', null, 'Categories'));
+  const body = table.createTBody();
+  for (const bin of bins) {
+    if (Math.abs(bin.total) < 0.005 && !bin.values.size) continue;
+    const tr = body.insertRow();
+    const parts = categories
+      .map((c) => ({ c, v: bin.values.get(c.key) || 0 }))
+      .filter((p) => Math.abs(p.v) >= 0.005)
+      .sort((a, b) => b.v - a.v)
+      .map((p) => `${p.c.name} ${money(p.v)}`);
+    tr.append(el('td', null, bin.title), el('td', 'num', money(bin.total)), el('td', 'muted', parts.join(', ')));
+  }
+  const wrap = el('div', 'stats-table-wrap');
+  wrap.append(table);
+  return wrap;
+}
+
+// A tap anywhere else closes the columns' tooltip (the chart itself stops its own taps).
+let hideTimelineTip = null;
+document.addEventListener('pointerdown', () => hideTimelineTip?.());
+
+// Redraw the columns when the widget's width changes (turning the phone, resizing the window).
+new ResizeObserver(() => {
+  const host = document.querySelector('#w-timeline .timeline-host');
+  if (!host || !timelineData || host.clientWidth === timelineWidth) return;
+  timelineWidth = host.clientWidth;
+  drawTimeline(host, timelineData.period, timelineData.rows);
+}).observe($('w-timeline'));
+
+$('btn-signin').addEventListener('click', () =>
+  run(async () => {
+    await signIn();
+    await open();
+  }),
+);
+
+start();

@@ -16,7 +16,7 @@ import { storage, SHEET_KEY, TAB_KEY, PERIOD_KEY, ORDER_KEY, ENTRY_ORDER_KEY, cl
 import { $, el, showError, setUpPage, withLoading, showSessionBanner, setUpUndo } from './ui.js';
 import { icon, categoryIcon } from './icons.js';
 import { startSync, PAST_YEARS_MS } from './sync.js';
-import { PeriodPicker, monthPeriod, todayIso } from './period.js';
+import { PeriodPicker, monthPeriod, todayIso, periodQuery } from './period.js';
 import { DEFAULT_SPREADSHEET, PEOPLE, BGN_PER_EUR, CATEGORIES, categoryStyle, badgeColours } from './config.js';
 
 const VIEWS = ['view-message', 'view-signin', 'view-pick', 'view-sheet'];
@@ -132,9 +132,14 @@ function signedOut(idle) {
   showSignIn(idle);
 }
 
-// Buttons that belong to an open spreadsheet: Add record, undo / redo, reset layout.
+// Buttons that belong to an open spreadsheet: Add record, undo / redo, statistics, reset layout.
 function showSheetControls(on) {
-  for (const id of ['btn-add', 'btn-undo', 'btn-redo', 'btn-reset']) $(id).hidden = !on;
+  for (const id of ['btn-add', 'btn-undo', 'btn-redo', 'btn-stats', 'btn-reset']) $(id).hidden = !on;
+}
+
+// The statistics page, opened with a period (the shown one, or a month card's month).
+function statsUrl(period) {
+  return `stats.html?${periodQuery(period)}`;
 }
 
 // The spreadsheet to open: the one chosen in this browser, otherwise the default one (config.js).
@@ -385,6 +390,7 @@ function showPeriod(period, { updated = false } = {}) {
   storage.local.set(TAB_KEY, linkTab);
   $('btn-raw').href = `raw.html?tab=${encodeURIComponent(linkTab)}${fixtureRequested() ? '&fixture' : ''}`;
   $('btn-sheets').href = spreadsheet.id === 'fixture' ? '#' : spreadsheetUrl(spreadsheet.id, sheetIdOf(linkTab));
+  $('btn-stats').href = statsUrl(period);
 
   render();
   $('notice').textContent = updated ? `Updated from Google Sheets at ${new Date().toLocaleTimeString('en-GB')}` : '';
@@ -612,7 +618,8 @@ function renderMonths() {
 }
 
 // addDate (optional): shows a "+" in the header that opens Add record with that date.
-function card(className, title, meta, addDate) {
+// month (optional, 'YYYY-MM'): shows a link to that month's statistics.
+function card(className, title, meta, addDate, month) {
   const section = el('section', className);
   const sticky = el('div', 'month-sticky');
   const inner = el('div', 'month-sticky-inner');
@@ -627,6 +634,14 @@ function card(className, title, meta, addDate) {
     add.append(icon('plus'));
     add.addEventListener('click', () => editor?.openAddDialog({ date: addDate }));
     heading.append(add);
+  }
+  if (month) {
+    const stats = el('a', 'button icon-button card-stats');
+    stats.href = statsUrl(monthPeriod(`${month}-01`));
+    stats.title = `Statistics for ${title}`;
+    stats.setAttribute('aria-label', stats.title);
+    stats.append(icon('stats'));
+    heading.append(stats);
   }
   head.append(heading, el('span', 'muted', meta));
   inner.append(head, columnHeader());
@@ -685,7 +700,7 @@ function monthCard({ year, block, entries }) {
   const addDate = todayMonth === block.month
     ? `${todayMonth}-${String(today.getDate()).padStart(2, '0')}`
     : lastDate || `${block.month}-01`;
-  const { section, list } = card('month', monthName(block.month), meta, addDate);
+  const { section, list } = card('month', monthName(block.month), meta, addDate, block.month);
   const newest = newestEntriesFirst();
   const ordered = newest ? [...entries].reverse() : entries;
   const n = entries.length;

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Statistics – Budget Sheets</title>
+  <script>
+    // Apply the saved theme before anything is drawn (dark by default).
+    try { if (localStorage.getItem('bs.theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch { /* ignore */ }
+  </script>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <!-- Installing on the home screen as an app (manifest; the iPhone uses apple-touch-icon). -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/icons/app-icon-180.png">
+  <meta name="apple-mobile-web-app-title" content="Budget Sheets">
+  <meta name="theme-color" content="#1d2024">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script type="module" src="js/stats.js"></script>
+</head>
+<body class="stats-page">
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="topbar-left">
+        <h1><a id="home" href="index.html">Budget Sheets</a></h1>
+      </div>
+      <div class="topbar-right">
+        <a id="btn-phone" class="button" href="dev/phone.html" data-icon="phone" hidden>Phone view</a>
+        <button id="btn-sync" type="button" class="sync-button" hidden></button>
+        <button id="btn-pin" type="button" class="icon-button" aria-label="Keep the top bar visible"></button>
+        <button id="btn-theme" type="button" class="icon-button" aria-label="Switch theme"></button>
+        <a id="btn-sheets" class="button icon-button" href="#" target="_blank" rel="noopener" title="Open in Google Sheets" aria-label="Open in Google Sheets" data-icon="external"></a>
+        <a id="back" class="button" href="index.html">← Back to budget</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <section id="view-message" class="card" hidden>
+      <p id="message-text"></p>
+    </section>
+
+    <section id="view-signin" class="card center" hidden>
+      <p id="signin-note" class="muted" hidden></p>
+      <p>Sign in with a Google account that has access to the budget spreadsheet.</p>
+      <button id="btn-signin" type="button" class="primary">Sign in with Google</button>
+    </section>
+
+    <section id="view-stats" hidden>
+      <div class="sheet-head">
+        <h2 id="sheet-title">Statistics</h2>
+      </div>
+
+      <!-- One row of choices above everything: every widget shows this period, person and currency. -->
+      <div class="view-bar stats-bar">
+        <div class="period">
+          <button id="period-prev" type="button" class="icon-button" title="Previous period" aria-label="Previous period"></button>
+          <button id="period-btn" type="button" class="period-button" aria-haspopup="dialog"></button>
+          <button id="period-next" type="button" class="icon-button" title="Next period" aria-label="Next period"></button>
+          <div id="period-panel" class="period-panel" role="dialog" aria-label="Choose a period" hidden></div>
+        </div>
+        <div id="person" class="seg seg-inline" role="radiogroup" aria-label="Whose spending"></div>
+        <button id="btn-compare" type="button" class="toggle-button"></button>
+        <button id="btn-currency" type="button" class="toggle-button currency-button"></button>
+      </div>
+
+      <div class="widgets">
+        <section id="w-dashboard" class="widget widget-dashboard"></section>
+        <section id="w-categories" class="widget widget-categories"></section>
+        <section id="w-timeline" class="widget widget-timeline"></section>
+      </div>
+      <p id="stats-note" class="stats-note muted"></p>
+    </section>
+  </main>
+</body>
+</html>

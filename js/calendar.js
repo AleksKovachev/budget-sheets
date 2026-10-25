@@ -47,7 +47,7 @@ export function monthTitle(iso) {
 
 // Fixed three-letter names (browsers differ, e.g. "Sep" vs "Sept").
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function shortMonth(iso) {
+export function shortMonth(iso) {
   return SHORT_MONTHS[Number(iso.slice(5, 7)) - 1];
 }
 

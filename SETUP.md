@@ -54,8 +54,10 @@ From the `BudgetSheets` folder:
 python serve.py
 ```
 
-Open <http://localhost:8000>. It must be exactly this address (not `127.0.0.1`), because it's
-the origin registered in step 3.7.
+Open <http://localhost:8000>. Locally the app uses test data (`private/fixture.json`, made from an
+exported .xlsx by `tools/xlsx_to_fixture.py`) instead of signing in to Google. To try the real
+sign-in locally, add `?real` to the address; that only works at exactly <http://localhost:8000>
+(not `127.0.0.1`) and only if that origin is registered in step 3.7.
 
 ## 5. Hosting (later)
 

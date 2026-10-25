@@ -54,11 +54,39 @@ export const CATEGORIES = {
   'others': { color: '#ffdaff', icon: 'dots' },
 };
 
+// A category name as the key above ("Wedding 💍 " -> "wedding").
+export function categoryKey(name) {
+  return String(name || '').toLowerCase().replace(/[^\p{L}\p{N}/ ]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
 export function categoryStyle(name) {
-  const key = String(name || '').toLowerCase().replace(/[^\p{L}\p{N}/ ]/gu, '').replace(/\s+/g, ' ').trim();
-  const style = CATEGORIES[key];
+  const style = CATEGORIES[categoryKey(name)];
   return style ? { ...style, ...badgeColours(style.color) } : null;
 }
+
+// Colours of the categories in charts: [light theme, dark theme]. Stronger versions of the sheet's colours
+// (those are too pale for thin bars), each category keeping its colour on every chart and period.
+// Fifteen colours can't all be told apart (least of all with colour blindness), so the charts always name
+// the category too (list, tooltip, legend); the frequent ones (first nine) are the most distinct.
+export const CHART_COLOURS = {
+  'groceries': ['#1baf7a', '#199e70'],
+  'restaurants/fast food': ['#eda100', '#c98500'],
+  'dog': ['#8d5a2b', '#a2693a'],
+  'bills': ['#e87ba4', '#d55181'],
+  'car': ['#e34948', '#e66767'],
+  'home': ['#7d7d78', '#8f8f89'],
+  'gifts': ['#0f9fc0', '#1a9cba'],
+  'others': ['#9c6ade', '#9c74dc'],
+  'health and beauty': ['#8f9a1e', '#929c22'],
+  'travel': ['#eb6834', '#d95926'],
+  'pharmacy': ['#2a78d6', '#3987e5'],
+  'wedding': ['#6250d6', '#7d6fe0'],
+  'fashion': ['#c45bb8', '#b968c9'],
+  'electronics': ['#008300', '#1f9a1f'],
+  'rent': ['#9c4a3a', '#b5604f'],
+};
+// Categories the app doesn't know, and entries without a category.
+export const OTHER_CHART_COLOUR = ['#55554f', '#6e6e68'];
 
 // Badge colours from a category colour: a lighter tint for the circle and a darker, more saturated shade
 // of the same hue for the icon (greys stay grey).

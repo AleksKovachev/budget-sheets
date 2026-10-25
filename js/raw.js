@@ -412,6 +412,7 @@ function decorate(td, r, c) {
   td.replaceChildren(el('span', 'cell-text', displayText(r, c)));
   td.className = '';
   td.removeAttribute('title');
+  delete td.dataset.tip; // (The app's tooltips keep titles here: ui.js setUpTooltips.)
   const colour = c < COLOURED_COLUMNS ? rowColour(r) : null;
   if (colour) {
     td.classList.add('cat-row');
