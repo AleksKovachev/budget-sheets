@@ -791,6 +791,8 @@ dialog.idle-warning::backdrop { background: rgb(0 0 0 / 0.6); }
 }
 /* Pressing and holding a button shows its tooltip, not a text selection or the browser's link menu. */
 button, .button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+/* The same for anything else with a tooltip, by finger (with a mouse its text stays selectable). */
+:root.touch [data-tip] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 /* ---- Editing on the main page ---- */
 
@@ -1068,9 +1070,14 @@ dialog.modal::backdrop { background: var(--overlay); }
 /* Whose spending: Combined | Aleks | Iliyana */
 .seg-inline { margin: 0; flex: none; }
 .seg-inline .seg-item { flex: none; padding: 6px 12px; }
-.seg-inline .seg-item:not(.active):hover { background: var(--hover); color: var(--text); }
+/* Hover colours only with a mouse: Android keeps a tapped element "hovered" until the next tap elsewhere.
+   (html.touch: the last tap was a finger or pen, ui.js; screen-type media queries miss phones with a pen.) */
+:root:not(.touch) .seg-inline .seg-item:not(.active):hover { background: var(--hover); color: var(--text); }
 .seg-inline .seg-item:not(.active):active { background: var(--pressed); }
 .currency-code { font-weight: 700; color: var(--accent); letter-spacing: 0.5px; }
+/* vs Last period | Usual (Avg) | Usual (Med) */
+.vs-switch { display: inline-flex; align-items: center; gap: 6px; }
+.vs-switch .seg-small .seg-item { padding: 6px 10px; font-size: 13px; }
 /* Smaller switches inside the cards (gauges: vs Usual / Last period; columns: how detailed). */
 .seg-small .seg-item { padding: 3px 9px; font-size: 12px; }
 .small-toggle { padding: 3px 10px; font-size: 13px; font-weight: 600; }
@@ -1084,7 +1091,9 @@ dialog.modal::backdrop { background: var(--overlay); }
   .widget-dashboard, .widget-timeline { grid-column: 1; }
   .widget-categories { grid-column: 2; grid-row: 1 / span 2; }
 }
-.widget { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px 14px; min-width: 0; }
+/* No tap highlight (Chrome on Android draws a blue box around a tapped donut piece): the widgets show
+   what was picked themselves. */
+.widget { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px 14px; min-width: 0; -webkit-tap-highlight-color: transparent; }
 .widget-head { display: flex; align-items: center; gap: 10px; min-height: 32px; padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
 .widget-head h3 { margin: 0; font-size: 16px; }
 .widget-who { margin-right: auto; font-size: 13px; color: var(--muted); }
@@ -1130,7 +1139,7 @@ dialog.modal::backdrop { background: var(--overlay); }
 .donut-centre .muted { font-size: 12px; line-height: 1.2; overflow-wrap: anywhere; }
 .cat-list { list-style: none; margin: 0; padding: 0; }
 .cat-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 8px; cursor: pointer; -webkit-user-select: none; user-select: none; }
-.cat-item:hover { background: var(--hover); }
+:root:not(.touch) .cat-item:hover { background: var(--hover); }
 .cat-item.active, .cat-item:active { background: var(--pressed); }
 .cat-item:focus:not(:focus-visible) { outline: none; }
 /* A category's badge ringed in its chart colour (list, tooltips), so it can be matched with the chart. */
@@ -1192,8 +1201,12 @@ dialog.modal::backdrop { background: var(--overlay); }
   .widget { padding: 10px 12px 12px; }
   .seg-inline { flex: 1 1 auto; }
   .seg-inline .seg-item { flex: 1; padding: 6px 4px; }
-  /* Whose spending on a row of its own; comparing and currency side by side below it. */
+  /* Whose spending and what to compare with on rows of their own; then comparing and currency. */
   #person { flex-basis: 100%; }
+  .vs-switch { flex-basis: 100%; }
+  .vs-switch #compare-with, .vs-switch .seg.seg-small { flex: 1; }
+  .vs-switch #compare-with { display: flex; }
+  .vs-switch .seg-small .seg-item { flex: 1; padding: 6px 4px; }
   #btn-compare { flex: 1; justify-content: center; }
   .gauge-label { font-size: 11px; }
   .gauge-value { font-size: 16px; }

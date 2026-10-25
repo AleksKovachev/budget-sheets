@@ -16,8 +16,13 @@ export function el(tag, className, text) {
 // True when the last tap came from a finger or a pen (phones, tablets) rather than a mouse. Used to skip the
 // on-screen keyboard where the app has its own input (calendar, amount keypad). Decided by the tap itself:
 // screen-type checks aren't reliable (phones with a pen can report a mouse-like pointer).
+// The page carries it as the class "touch" on <html> too, for CSS (e.g. no hover colours by finger).
 let lastPointerType = window.matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
-document.addEventListener('pointerdown', (event) => { lastPointerType = event.pointerType || 'mouse'; }, true);
+document.documentElement.classList.toggle('touch', lastPointerType !== 'mouse');
+document.addEventListener('pointerdown', (event) => {
+  lastPointerType = event.pointerType || 'mouse';
+  document.documentElement.classList.toggle('touch', lastPointerType !== 'mouse');
+}, true);
 export const touchInput = () => lastPointerType !== 'mouse';
 
 export function showError(err) {

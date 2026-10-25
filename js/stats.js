@@ -4,9 +4,10 @@
 // budget.js spending()), how a period that isn't over yet is compared, and currency (lev ↔ euro at the
 // fixed rate). Read-only; kept in sync like the other pages.
 //
-// Comparisons:
+// Comparisons (the "vs" switch; every widget compares with the same one):
 //   Last period – the period just before (September for October, 2025 for 2026).
-//   Usual       – the average of the same period in the earlier years with data (October 2022–2025).
+//   Usual       – the same period in the earlier years with data (October 2022–2025): their average, or
+//                 their median, which one exceptional year doesn't pull up.
 //   While the shown period isn't over, "Up to today" compares only as many days of each (1–25 October with
 //   1–25 September); "Whole periods" compares with them in full.
 
@@ -46,7 +47,7 @@ const cache = new Map();
 let currency = 'EUR';
 let who = 'combined';
 let compareMode = 'today'; // 'today' (up to today) | 'whole' (whole periods)
-let gaugeBase = 'last'; // What the gauges compare with: 'last' | 'usual'
+let compareWith = 'last'; // What everything is compared with: 'last' | 'mean' | 'median' (BASES)
 let detailIndex = null; // Columns: 0, 1 or 2 (most detailed first); null: the most detailed that fits.
 
 function show(view) {
@@ -308,14 +309,16 @@ function periodYearsBefore(period, n) {
 //   current  { from, to, totals }  the shown period (up to today, if that's chosen and it isn't over)
 //   days     how many of its days are compared (null: all of them)
 //   last     { from, to, totals } | null
-//   usual    { periods: [{ from, to }], totals (averages) } | null
+//   mean     { periods: [{ from, to }], totals (averages) } | null     usual: the average…
+//   median   { periods: [{ from, to }], totals (medians) } | null      …or the median of the earlier years
+// (The median isn't pulled up by one exceptional year, e.g. the year a car was bought.)
 function comparisons(period, rows) {
   const today = todayIso();
   const cut = compareMode === 'today' && ongoing(period) ? daysBetween(period.from, today) + 1 : null;
   const part = (p) => ({ from: p.from, to: cut ? minIso(p.to, addDays(p.from, cut - 1)) : p.to });
   const withTotals = (range) => ({ ...range, totals: totals(rows, range.from, range.to) });
   const current = withTotals(part(period));
-  if (period.kind === 'all' || period.from > today) return { current, days: cut, last: null, usual: null };
+  if (period.kind === 'all' || period.from > today) return { current, days: cut, last: null, mean: null, median: null };
 
   const firstDay = `${yearTitles.at(-1)}-01-01`; // Nothing is recorded before the oldest year tab.
   const previous = shift(period, -1);
@@ -326,15 +329,29 @@ function comparisons(period, rows) {
     if (p.from < firstDay) break;
     earlier.push(part(p));
   }
-  let usual = null;
-  if (earlier.length) {
-    const each = earlier.map((r) => totals(rows, r.from, r.to));
-    usual = { periods: earlier, totals: Object.fromEntries(WHO.map((w) => [w.key, each.reduce((s, t) => s + t[w.key], 0) / each.length])) };
-  }
-  return { current, days: cut, last, usual };
+  if (!earlier.length) return { current, days: cut, last, mean: null, median: null };
+  const each = earlier.map((r) => totals(rows, r.from, r.to));
+  const usual = (of) => ({ periods: earlier, totals: Object.fromEntries(WHO.map((w) => [w.key, of(each.map((t) => t[w.key]))])) });
+  return { current, days: cut, last, mean: usual(mean), median: usual(median) };
 }
 
-// "October in 2022–2025", "2022–2025", "the same dates in 2025"
+const mean = (values) => values.reduce((s, v) => s + v, 0) / values.length;
+
+// The middle value (of an even number: the average of the two in the middle).
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// What the widgets compare with (the "vs" switch): names for switch, captions and explanations.
+const BASES = {
+  last: { switch: 'Last period', caption: 'Last period' },
+  mean: { switch: 'Usual (Avg)', caption: 'Usual (avg)', how: 'average' },
+  median: { switch: 'Usual (Med)', caption: 'Usual (med)', how: 'median' },
+};
+
+// "October in 2022–2025", "2022–2025", "the same dates in 2025" (of BASES.mean / median)
 function usualText(period, usual) {
   const years = usual.periods.map((p) => Number(p.from.slice(0, 4)));
   const span = years.length > 1 ? `${Math.min(...years)}–${Math.max(...years)}` : String(years[0]);
@@ -467,6 +484,16 @@ function showChoices() {
     item.setAttribute('aria-checked', String(active));
   }
 
+  const usualTip = (how) => `the ${how} of the same period in the earlier years`;
+  const vs = segmented(Object.entries(BASES).map(([base, names]) => [base, names.switch]), compareWith, (base) => {
+    compareWith = base;
+    choiceChanged();
+  }, 'Compare with');
+  vs.children[0].title = 'Compare with the period just before';
+  vs.children[1].title = `Compare with the usual amount: ${usualTip('average')}`;
+  vs.children[2].title = `Compare with the usual amount: ${usualTip('median')} (one exceptional year, like a car bought, doesn't pull it up)`;
+  $('compare-with').replaceChildren(vs);
+
   const compare = $('btn-compare');
   const toToday = compareMode === 'today';
   compare.replaceChildren(icon('calendar'), el('span', null, toToday ? 'Up to today' : 'Whole periods'));
@@ -501,24 +528,31 @@ function render() {
     + `Leva and euro are converted at the fixed rate 1 EUR = ${BGN_PER_EUR} BGN.`;
 }
 
-// Dashboard: one gauge each for both of you together and for each person, compared with the usual
-// amount or the last period (the switch in the card's header).
+// Tooltip lines comparing `now` with all three (last period, usual average, usual median), for `key`.
+function comparisonTips(compared, key, now) {
+  const lines = [];
+  for (const [base, { caption }] of Object.entries(BASES)) {
+    const other = compared[base];
+    if (!other) continue;
+    const d = change(now, other.totals[key]);
+    lines.push(`${caption}: ${money(other.totals[key])}${d === null ? '' : ` (${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}%)`}`);
+  }
+  return lines;
+}
+
+// "Last period: 01.09 – 30.09.2026." / "Usual (median): the median of October in 2022–2025."
+function baseText(period, compared) {
+  const base = compared[compareWith];
+  if (compareWith === 'last') return `Last period: ${rangeText(base.from, base.to)}.`;
+  const { how } = BASES[compareWith];
+  return `Usual (${how}): the ${how} of ${usualText(period, base)}.`;
+}
+
+// Dashboard: one gauge each for both of you together and for each person, compared with the last period
+// or the usual amount (the "vs" switch above).
 function renderDashboard(period, compared) {
   const box = $('w-dashboard');
-  const base = compared[gaugeBase];
-
-  const toggle = el('button', 'toggle-button small-toggle');
-  toggle.type = 'button';
-  toggle.append(el('span', 'muted', 'vs'), el('span', null, gaugeBase === 'usual' ? 'Usual' : 'Last period'));
-  toggle.title = gaugeBase === 'usual'
-    ? 'The gauges compare with the usual amount (the average of the same period in earlier years). Click to compare with the last period.'
-    : 'The gauges compare with the last period. Click to compare with the usual amount (the average of the same period in earlier years).';
-  toggle.title += ' Pointing at a gauge shows both.';
-  toggle.setAttribute('aria-label', toggle.title);
-  toggle.addEventListener('click', () => {
-    gaugeBase = gaugeBase === 'usual' ? 'last' : 'usual';
-    renderDashboard(period, compared);
-  });
+  const base = compared[compareWith];
 
   const gauges = el('div', 'gauges');
   for (const w of WHO) {
@@ -532,28 +566,20 @@ function renderDashboard(period, compared) {
     if (diff !== null) {
       // (The line below says what it's compared with.)
       const text = diff === 0 ? 'The same' : `${Math.abs(diff)}% ${diff > 0 ? 'above' : 'below'}`;
-      const caption = gaugeBase === 'usual' ? 'Usual' : 'Last period';
-      item.append(el('div', 'gauge-sub', text), el('div', 'gauge-sub muted', `${caption} ${compactMoney(before)}`));
+      item.append(el('div', 'gauge-sub', text), el('div', 'gauge-sub muted', `${BASES[compareWith].caption} ${compactMoney(before)}`));
     }
-    // The tooltip compares with both, whichever the gauges show.
-    const lines = [`${w.key === 'combined' ? 'Total spent' : w.name}: ${money(spent)}`];
-    for (const [name, other] of [['Last period', compared.last], ['Usual', compared.usual]]) {
-      if (!other) continue;
-      const d = change(spent, other.totals[w.key]);
-      lines.push(`${name}: ${money(other.totals[w.key])}${d === null ? '' : ` (${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}%)`}`);
-    }
-    item.title = lines.join('\n');
+    // The tooltip compares with all three, whichever the gauges show.
+    item.title = [`${w.key === 'combined' ? 'Total spent' : w.name}: ${money(spent)}`, ...comparisonTips(compared, w.key, spent)].join('\n');
     gauges.append(item);
   }
 
   let note;
   if (period.from > todayIso()) note = 'This period has not started yet.';
-  else if (!base) note = `There is no ${gaugeBase === 'usual' ? 'earlier year' : 'earlier period'} to compare with, so the gauges show no needle.`;
-  else if (gaugeBase === 'usual') note = `Usual: the average of ${usualText(period, base)}.`;
-  else note = `Last period: ${rangeText(base.from, base.to)}.`;
+  else if (!base) note = `There is no ${compareWith === 'last' ? 'earlier period' : 'earlier year'} to compare with, so the gauges show no needle.`;
+  else note = baseText(period, compared);
   if (base && compared.days) note += ` Only the first ${plural(compared.days, 'day')} of each are compared, as this period isn't over yet.`;
   if (base) note += ' Green: below 90%, orange: 90–110%, red: above 110%.';
-  box.replaceChildren(widgetHead('Dashboard', el('span', 'widget-spacer'), toggle), gauges, el('p', 'widget-note muted', note));
+  box.replaceChildren(widgetHead('Dashboard'), gauges, el('p', 'widget-note muted', note));
 }
 
 // Categories picked in the donut or the list (their amounts add up in the middle of the donut).
@@ -664,30 +690,25 @@ function renderCategories(period, rows, compared) {
 // Lines like "vs 01.09 – 25.09.2026  ↑ +12%" for the last period and the usual amount.
 function comparisonLines(period, compared) {
   const box = el('div', 'cat-compare');
+  const base = compared[compareWith];
+  if (!base) return box;
   const now = compared.current.totals[who];
-  const line = (label, before, title) => {
-    const row = el('div', 'compare-line');
-    row.title = title;
-    const diff = change(now, before);
-    const delta = el('span', `delta${diff > 0 ? ' delta-up' : diff < 0 ? ' delta-down' : ''}`);
-    if (diff === null) {
-      delta.textContent = 'nothing then';
-    } else {
-      if (diff) delta.append(icon(diff > 0 ? 'arrowUpSmall' : 'arrowDownSmall'));
-      delta.append(`${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${Math.abs(diff)}%`);
-    }
-    row.append(el('span', 'muted', label), delta);
-    box.append(row);
-  };
-  const days = compared.days ? ` (the first ${plural(compared.days, 'day')} of each)` : '';
-  if (compared.last) {
-    const { from, to, totals: t } = compared.last;
-    line(`vs ${rangeText(from, to)}`, t[who], `Last period: ${money(t[who])} then, ${money(now)} now${days}.`);
+  const before = base.totals[who];
+  const row = el('div', 'compare-line');
+  const diff = change(now, before);
+  const delta = el('span', `delta${diff > 0 ? ' delta-up' : diff < 0 ? ' delta-down' : ''}`);
+  if (diff === null) {
+    delta.textContent = 'nothing then';
+  } else {
+    if (diff) delta.append(icon(diff > 0 ? 'arrowUpSmall' : 'arrowDownSmall'));
+    delta.append(`${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${Math.abs(diff)}%`);
   }
-  if (compared.usual) {
-    const u = compared.usual.totals[who];
-    line('vs usual', u, `Usual: ${money(u)}, the average of ${usualText(period, compared.usual)}${days}. Now: ${money(now)}.`);
-  }
+  const label = compareWith === 'last' ? `vs ${rangeText(base.from, base.to)}` : `vs ${BASES[compareWith].caption.toLowerCase()}`;
+  row.append(el('span', 'muted', label), delta);
+  // The tooltip: all three comparisons, and what they are.
+  const days = compared.days ? ` Only the first ${plural(compared.days, 'day')} of each are compared.` : '';
+  row.title = [`Now: ${money(now)}`, ...comparisonTips(compared, who, now), `${baseText(period, compared)}${days}`].join('\n');
+  box.append(row);
   return box;
 }
 
