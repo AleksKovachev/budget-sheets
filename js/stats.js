@@ -584,9 +584,11 @@ function renderDashboard(period, compared) {
 
 // Categories picked in the donut or the list (their amounts add up in the middle of the donut).
 let picked = new Set();
-// A click anywhere else lets go of them (the donut and the list stop their own clicks).
+// A click outside the card lets go of them (a click inside it that misses a small donut piece doesn't).
 let clearPicked = null;
-document.addEventListener('click', () => clearPicked?.());
+document.addEventListener('click', (event) => {
+  if (!event.target.closest?.('#w-categories')) clearPicked?.();
+});
 
 // Expenses by category for the whole period: a donut and the list, compared with the last period and the
 // usual amount.
