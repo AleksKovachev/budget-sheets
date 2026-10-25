@@ -620,8 +620,8 @@ function renderCategories(period, rows, compared) {
     list.append(li);
   }
 
-  // Pointing at a category (while none is picked) previews it; clicking picks it, Ctrl+click (or a tap on
-  // a phone) adds it to the picked ones or takes it out again.
+  // Pointing at a category (while none is picked) previews it. A click or tap adds it to the picked ones
+  // or takes it out again; Ctrl+click picks only it.
   for (const key of [...picked]) if (!items.has(key)) picked.delete(key);
   let preview = null;
   const update = () => {
@@ -641,11 +641,12 @@ function renderCategories(period, rows, compared) {
     centre.replaceChildren(label, el('strong', null, compactMoney(value)), el('span', 'muted', share));
   };
   const pick = (key, event) => {
-    if (event.ctrlKey || event.metaKey || touchInput()) {
-      if (picked.has(key)) picked.delete(key);
-      else picked.add(key);
+    if ((event.ctrlKey || event.metaKey) && !touchInput()) {
+      picked = new Set([key]);
+    } else if (picked.has(key)) {
+      picked.delete(key);
     } else {
-      picked = picked.size === 1 && picked.has(key) ? new Set() : new Set([key]);
+      picked.add(key);
     }
     preview = null;
     update();

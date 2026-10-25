@@ -433,6 +433,10 @@ select:open, select:open:hover { background: var(--pressed); border-color: var(-
 .entries .entry.alt.swiping { background: var(--row-alt); }
 .swipe-actions { position: absolute; left: 0; right: 0; z-index: 0; display: flex; justify-content: space-between; }
 .entries-tail .swipe-actions { border-radius: 0 0 9px 9px; overflow: hidden; }
+/* The card's last row: while it's moved, it is cut along the card's rounded corners (its own rounded
+   corners move away with it, so it is square meanwhile). */
+.entries-tail:has(> .entry.swiping) { border-radius: 0 0 9px 9px; }
+.entries-tail .entry.swiping { border-radius: 0; }
 .swipe-side { display: flex; }
 .swipe-actions[data-show="left"] .swipe-side.right, .swipe-actions[data-show="right"] .swipe-side.left { visibility: hidden; }
 .swipe-btn {
