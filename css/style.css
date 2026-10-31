@@ -1094,8 +1094,9 @@ dialog.modal::backdrop { background: var(--overlay); }
   .widgets { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); grid-template-rows: auto 1fr; }
   .widget-dashboard, .widget-timeline { grid-column: 1; }
   .widget-categories { grid-column: 2; grid-row: 1 / span 2; }
-  /* The next row: on the right (a widget still to come takes the left). */
-  .widget-compare { grid-column: 2; grid-row: 3; }
+  /* The next rows: the whole width each (the report's columns need the room). */
+  .widget-compare { grid-column: 1 / -1; grid-row: 3; }
+  .widget-report { grid-column: 1 / -1; grid-row: 4; }
 }
 /* No tap highlight (Chrome on Android draws a blue box around a tapped donut piece): the widgets show
    what was picked themselves. */
@@ -1219,6 +1220,40 @@ dialog.modal::backdrop { background: var(--overlay); }
 .stats-table th, .stats-table td { padding: 5px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
 .stats-table td:first-child { white-space: nowrap; }
 .stats-table .num { text-align: right; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Expenses report: the categories stay in place while the amounts scroll sideways. */
+.widget-report .widget-head { flex-wrap: wrap; row-gap: 6px; }
+.report-count { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.report-percent { min-width: 32px; min-height: 30px; font-weight: 700; font-size: 13px; }
+.report-table th, .report-table td { vertical-align: middle; }
+.report-table th:first-child, .report-table td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--line); }
+.report-table .num { font-weight: 400; }
+.report-table .report-now, .report-total td { font-weight: 700; }
+.report-sub { font-size: 11px; font-weight: 400; }
+.report-name { display: flex; align-items: center; gap: 8px; white-space: normal; min-width: 100px; }
+.report-table th.num, .report-table td.num { padding-left: 4px; padding-right: 6px; }
+.report-cell { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-height: 28px; }
+.report-cell .delta { padding: 1px 5px; gap: 2px; font-size: 11px; }
+.report-cell .delta svg.icon { width: 11px; height: 11px; }
+.report-records { padding: 3px; border-color: transparent; background: none; }
+.report-records svg.icon { width: 18px; height: 18px; }
+@media (pointer: coarse) { .report-records { padding: 6px; } }
+/* Phones: the categories leave most of the width to the amounts. */
+@media (max-width: 600px) {
+  .report-table th:first-child, .report-table td:first-child { padding-left: 2px; padding-right: 6px; }
+  .report-name { width: 100px; min-width: 0; gap: 6px; font-size: 12px; }
+  .report-name .cat-badge.small { flex: none; width: 22px; height: 22px; }
+  .report-name .cat-badge.small .icon { width: 18px; height: 18px; }
+}
+/* The records behind an amount. */
+@media (min-width: 601px) { dialog.records-dialog { width: min(620px, calc(100vw - 24px)); } }
+.records-sum { display: flex; align-items: center; gap: 10px; }
+.records-sum .widget-who { margin-right: auto; }
+.records-day { display: flex; flex-direction: column; gap: 6px; }
+.records-day-head { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 4px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.records-item { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-size: 14px; }
+.records-what { min-width: 0; overflow-wrap: anywhere; }
+.records-details { font-size: 12px; margin-top: 1px; }
+.records-amount { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
 .stats-note { margin: 14px 2px 0; font-size: 12px; }
 
 @media (max-width: 600px) {

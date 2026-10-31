@@ -19,7 +19,7 @@ import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.j
 import {
   storage, SHEET_KEY,
 } from './storage.js';
-import { $, el, showError, setUpPage, withLoading, showSessionBanner, touchInput } from './ui.js';
+import { $, el, showError, setUpPage, withLoading, showSessionBanner, touchInput, openDialog } from './ui.js';
 import { icon, categoryIcon } from './icons.js';
 import { startSync, PAST_YEARS_MS } from './sync.js';
 import { PeriodPicker, monthPeriod, yearPeriod, todayIso, shift, periodQuery, periodFromQuery } from './period.js';
@@ -235,8 +235,8 @@ async function syncNow() {
   return true;
 }
 
-// Every entry of the read years as { date, key (category), name, amounts: { combined, <person>… } } in
-// the chosen currency. Carry-overs are left out (they move last year's balance, not spending).
+// Every entry of the read years as { date, key (category), name, amounts: { combined, <person>… }, entry,
+// tab } in the chosen currency. Carry-overs are left out (they move last year's balance, not spending).
 function spendingRows() {
   const rows = [];
   for (const title of titlesFor(picker.period)) {
@@ -250,7 +250,7 @@ function spendingRows() {
         const spent = spending(entry);
         const amounts = {};
         for (const [key, amount] of Object.entries(spent)) amounts[key] = convert(amount, year.year, currency);
-        rows.push({ date, key: categoryKey(entry.category), name: entry.category, amounts });
+        rows.push({ date, key: categoryKey(entry.category), name: entry.category, amounts, entry, tab: title });
       }
     }
   }
@@ -268,8 +268,9 @@ function totals(rows, from, to) {
   return Object.fromEntries(WHO.map((w) => [w.key, sum(inRange, w.key)]));
 }
 
-// Per category: [{ key, name, value, colour }], largest first (categories that add up to nothing left out).
-function categoryTotals(rows) {
+// Per category: [{ key, name, value, colour }], largest first (categories that add up to nothing left out,
+// unless keepZero).
+function categoryTotals(rows, keepZero = false) {
   const byKey = new Map();
   for (const row of rows) {
     const item = byKey.get(row.key) || { key: row.key, name: '', value: 0 };
@@ -278,7 +279,7 @@ function categoryTotals(rows) {
     byKey.set(row.key, item);
   }
   return [...byKey.values()]
-    .filter((c) => Math.abs(c.value) >= 0.005)
+    .filter((c) => keepZero || Math.abs(c.value) >= 0.005)
     .map((c) => ({ ...c, name: c.name || 'No category', colour: CHART_COLOURS[c.key] || OTHER_CHART_COLOUR }))
     .sort((a, b) => b.value - a.value);
 }
@@ -523,6 +524,7 @@ function render() {
   renderCategories(period, rows, compared);
   renderTimeline(period, rows, compared);
   renderCompare(period, rows, compared);
+  renderReport(period, rows, compared);
   $('stats-note').textContent = 'How amounts are counted: Combined is everything paid, including cash in. '
     + 'A person\'s amount is what they actually paid: everything in their "Paid" and "Cash in" columns, in full '
     + '("Personal" is already part of "Paid"). Carry-overs from the year before are left out. '
@@ -1268,6 +1270,185 @@ function renderCompare(period, rows, compared) {
       tip.replaceChildren(el('div', 'tip-title', `Day ${i + 1}: spent so far`), grid);
     }));
   });
+}
+
+// ---- Expenses report: per category, the shown period and the ones before it, with the records behind
+// every amount ----
+
+const REPORT_MAX = 6;
+let reportCount = 3; // How many periods to show (fewer when there aren't as many).
+let reportPercent = false; // Show how much each amount differs from the period before it.
+let reportSort = 'category'; // 'category' (by name) | 'highest' | 'lowest' (by the amount of the newest period)
+const REPORT_SORTS = [['category', 'Category'], ['highest', 'Highest first'], ['lowest', 'Lowest first']];
+
+// The shown period and the ones before it, newest first: { label, sub, from, to }. One more than can be
+// shown, for the percentages of the last column. (Up to today, the same days of each, as everywhere.)
+function reportPeriods(period, compared) {
+  const list = [period];
+  if (period.kind !== 'all') {
+    const firstDay = `${yearTitles.at(-1)}-01-01`; // Nothing is recorded before the oldest year tab.
+    for (let p = shift(period, -1); list.length <= REPORT_MAX && p.from >= firstDay; p = shift(p, -1)) list.push(p);
+  }
+  return list.map((p) => {
+    const to = compared.days ? minIso(p.to, addDays(p.from, compared.days - 1)) : p.to;
+    const named = p.kind === 'month' || p.kind === 'year';
+    return { from: p.from, to, label: named ? p.label : rangeText(p.from, to), sub: named && to !== p.to ? rangeText(p.from, to) : '' };
+  });
+}
+
+function renderReport(period, rows, compared) {
+  const box = $('w-report');
+  const counted = rows.filter((r) => Math.abs(r.amounts[who]) >= 0.005);
+  const periods = reportPeriods(period, compared).map((p) => ({ ...p, rows: between(counted, p.from, p.to) }));
+  const available = Math.min(REPORT_MAX, periods.length);
+  const columns = periods.slice(0, Math.min(reportCount, available));
+
+  const tools = [whoTag()];
+  if (available > 1) {
+    const counts = Array.from({ length: available - 1 }, (_, i) => [i + 2, String(i + 2)]);
+    const count = el('span', 'report-count');
+    count.append(el('span', 'muted', 'Periods'), segmented(counts, columns.length, (n) => {
+      reportCount = n;
+      renderReport(period, rows, compared);
+    }, 'How many periods'));
+    const percentSwitch = el('button', `icon-button report-percent${reportPercent ? ' active' : ''}`, '%');
+    percentSwitch.type = 'button';
+    percentSwitch.title = reportPercent ? 'Hide the change from the period before' : 'Show the change from the period before';
+    percentSwitch.setAttribute('aria-label', percentSwitch.title);
+    percentSwitch.setAttribute('aria-pressed', String(reportPercent));
+    percentSwitch.addEventListener('click', () => {
+      reportPercent = !reportPercent;
+      renderReport(period, rows, compared);
+    });
+    tools.push(count, percentSwitch);
+  }
+  const sorting = el('span', 'report-count');
+  sorting.append(el('span', 'muted', 'Sort'), segmented(REPORT_SORTS, reportSort, (value) => {
+    reportSort = value;
+    renderReport(period, rows, compared);
+  }, 'How to sort the categories'));
+  tools.splice(1, 0, sorting);
+  const head = widgetHead('Expenses report', ...tools);
+
+  // The same categories whatever the sorting, in the order chosen (equal amounts by name).
+  const newest = new Map(categoryTotals(columns[0].rows, true).map((c) => [c.key, c.value]));
+  const amountOf = (c) => newest.get(c.key) || 0;
+  const sign = { highest: -1, lowest: 1 }[reportSort];
+  const categories = categoryTotals(columns.flatMap((c) => c.rows), true)
+    .sort((a, b) => (sign ? sign * (amountOf(a) - amountOf(b)) : 0) || a.name.localeCompare(b.name));
+  if (!categories.length) {
+    box.replaceChildren(head, el('p', 'widget-empty muted', 'Nothing spent in these periods.'));
+    return;
+  }
+
+  const table = el('table', 'stats-table report-table');
+  const headRow = table.createTHead().insertRow();
+  headRow.append(el('th', null, 'Category'));
+  for (const column of columns) {
+    const th = el('th', 'num', column.label);
+    if (column.sub) th.append(el('div', 'muted report-sub', column.sub));
+    headRow.append(th);
+  }
+
+  // The amount of a column (of the rows `of` picks), its change from the period before and, with `onRecords`,
+  // the button showing its records.
+  const amountCell = (i, of, onRecords) => {
+    const picked = of(periods[i].rows);
+    const now = sum(picked);
+    const line = el('div', 'report-cell');
+    if (onRecords && picked.length) {
+      const button = el('button', 'icon-button report-records');
+      button.type = 'button';
+      button.append(icon('records'));
+      button.title = `Show the ${plural(picked.length, 'record')}`;
+      button.setAttribute('aria-label', button.title);
+      button.addEventListener('click', () => onRecords(periods[i], picked));
+      line.append(button);
+    }
+    if (reportPercent && periods[i + 1]) {
+      const before = sum(of(periods[i + 1].rows));
+      if (before > 0) line.append(deltaPill(change(now, before)));
+      else if (now > 0) line.append(el('span', 'delta', 'new'));
+    }
+    line.append(el('span', picked.length ? null : 'muted', money(now)));
+    const td = el('td', `num${i === 0 ? ' report-now' : ''}`);
+    td.append(line);
+    return td;
+  };
+
+  const body = table.createTBody();
+  const total = body.insertRow();
+  total.className = 'report-total';
+  total.append(el('td', null, 'Total'), ...columns.map((_, i) => amountCell(i, (list) => list)));
+  for (const category of categories) {
+    const tr = body.insertRow();
+    const name = el('td');
+    const label = el('div', 'report-name');
+    // (A long name may wrap after a slash too.)
+    label.append(categoryBadge(category), el('span', null, category.name.replaceAll('/', '/​')));
+    name.append(label);
+    const of = (list) => list.filter((r) => r.key === category.key);
+    tr.append(name, ...columns.map((_, i) => amountCell(i, of, (column, picked) => showRecords(category, column, picked))));
+  }
+  const wrap = el('div', 'stats-table-wrap report-wrap');
+  wrap.append(table);
+
+  const parts = [];
+  if (reportPercent) parts.push('Percentages: the change from the period before.');
+  if (compared.days) parts.push(`Only the first ${plural(compared.days, 'day')} of each are counted, as this period isn't over yet.`);
+  box.replaceChildren(head, wrap);
+  if (parts.length) box.append(el('p', 'widget-note muted', parts.join(' ')));
+}
+
+// Where a record is in the spreadsheet: "2026, row 123", a link to that row (the test data has no spreadsheet).
+function recordPlace(row) {
+  const text = `${row.tab}, row ${row.entry.rowNumber}`;
+  if (fixture) return el('span', null, text);
+  const sheetId = meta.sheets.find((s) => s.properties.title === row.tab)?.properties.sheetId;
+  const link = el('a', null, text);
+  link.href = `${spreadsheetUrl(spreadsheetId, sheetId)}&range=A${row.entry.rowNumber}`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.title = 'Open this row in Google Sheets';
+  return link;
+}
+
+// The records behind an amount, by date: what they were, who paid and which row of the spreadsheet they're in.
+function showRecords(category, column, rows) {
+  const { body, foot } = openDialog({ title: `${category.name}, ${column.sub || column.label}`, className: 'records-dialog' });
+  foot.remove();
+  const summary = el('div', 'records-sum');
+  summary.append(el('strong', null, `Found ${plural(rows.length, 'record')}`), whoTag(), el('strong', null, money(sum(rows))));
+  body.append(summary);
+
+  const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date) || a.entry.rowNumber - b.entry.rowNumber);
+  for (const date of new Set(sorted.map((r) => r.date))) {
+    const onDate = sorted.filter((r) => r.date === date);
+    const group = el('div', 'records-day');
+    const dayHead = el('div', 'records-day-head');
+    dayHead.append(el('span', null, isoToBg(date)), el('span', null, money(sum(onDate))));
+    group.append(dayHead);
+    for (const row of onDate) {
+      const item = el('div', 'records-item');
+      const what = el('div', 'records-what');
+      const details = el('div', 'muted records-details');
+      // Both together: who paid (and how much, when both did).
+      if (who === 'combined') {
+        const payers = PEOPLE.filter((p) => Math.abs(row.amounts[p.key]) >= 0.005);
+        for (const person of payers) {
+          details.append(whoLabel(person.key));
+          if (payers.length > 1) details.append(` ${money(row.amounts[person.key])}`);
+          details.append(' · ');
+        }
+      }
+      details.append(recordPlace(row));
+      if (!row.entry.date) details.append(` · the date in the sheet: "${row.entry.rawDate}"`);
+      what.append(el('div', null, row.entry.description || category.name), details);
+      item.append(what, el('span', 'records-amount', money(row.amounts[who])));
+      group.append(item);
+    }
+    body.append(group);
+  }
 }
 
 $('btn-signin').addEventListener('click', () =>
