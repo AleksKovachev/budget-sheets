@@ -1,5 +1,5 @@
 """Converts an .xlsx export into private/fixture.json for local testing without signing in
-(the app's ?fixture mode and tests/parser.html). The output is git-ignored.
+(the test data the app uses on the local dev server, and tests/parser.html). The output is git-ignored.
 
 Per tab: cached cell values (like the Sheets API's UNFORMATTED_VALUE response), formulas,
 cells with a date format, dropdown rules and the frozen row count.
@@ -87,7 +87,9 @@ def main(src):
         validations = []
         for dv in root.findall("m:dataValidations/m:dataValidation", NS):
             f1 = dv.find("m:formula1", NS)
-            validations.append({"sqref": dv.get("sqref"), "type": dv.get("type"), "formula1": f1.text if f1 is not None else None})
+            validations.append({"sqref": dv.get("sqref"),
+                                "type": dv.get("type"),
+                                "formula1": f1.text if f1 is not None else None})
 
         pane = root.find("m:sheetViews/m:sheetView/m:pane", NS)
         frozen = int(float(pane.get("ySplit", 0))) if pane is not None and pane.get("state") == "frozen" else 0
