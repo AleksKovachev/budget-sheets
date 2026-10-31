@@ -132,9 +132,10 @@ function niceTicks(lo, hi, count = 4) {
 // bins: [{ label (axis), values: Map key -> amount }]; categories: [{ key, colour }] in stacking order
 // (first at the base line). axisText(v) formats the value axis. The columns get at least `minSlot` px
 // each: when they don't fit into `width`, the plot is wider (the page lets it scroll sideways).
-// columns: whether to draw them. line (optional): { colour, area, halo }, a line through the bins' totals,
-// over the columns; area: a fading wash under it; halo: an edge in the card's colour, to stand out from them.
-// Everything stays in the same place with or without either.
+// columns: whether to draw them. line (optional): { colour, area, halo, points }, a line over the columns;
+// points: [{ at (place along the bins: 1.5 is the middle of the second), value }], by default the bins'
+// totals; area: a fading wash under it; halo: an edge in the card's colour, to stand out from them.
+// Columns stay in the same place with or without a line.
 // Returns { axis, plot, scrolls, binAt(x), band(i), centreOf(i) }: axis holds the value labels (it stays
 // in place), plot everything else; x positions are CSS pixels from the plot's left edge.
 export function stackedColumns({ width, height, bins, categories, axisText, minSlot, columns = true, line = null }) {
@@ -147,8 +148,13 @@ export function stackedColumns({ width, height, bins, categories, axisText, minS
     }
     return { up, down };
   });
-  const hi = Math.max(0, ...sums.map((s) => s.up));
-  const lo = Math.min(0, ...sums.map((s) => s.down));
+  const linePoints = line?.points || bins.map((_, i) => ({ at: i + 0.5, value: sums[i].up + sums[i].down }));
+  // (A smaller sub-period's total can go past its column, when a refund later on made the column smaller.)
+  const lineValues = line ? linePoints.map((p) => p.value) : [];
+  const hi = Math.max(0, ...sums.map((s) => s.up), ...lineValues);
+  // (A dip too small to see gets no room of its own: a whole step below zero would cost a fifth of the height.)
+  const dip = Math.min(0, ...lineValues);
+  const lo = Math.min(0, ...sums.map((s) => s.down), dip < -0.02 * hi ? dip : 0);
   const ticks = niceTicks(lo, hi || 1);
   const top = 8;
   const bottom = height - 24; // Room for the bin labels.
@@ -204,8 +210,7 @@ export function stackedColumns({ width, height, bins, categories, axisText, minS
     label.textContent = bin.label;
   });
 
-  // The total of each bin: on the top of its column (with no refunds in it).
-  const points = bins.map((_, i) => ({ x: i * slot + slot / 2, y: y(sums[i].up + sums[i].down) }));
+  const points = linePoints.map((p) => ({ x: p.at * slot, y: y(p.value) }));
   if (line) drawLine(plot, points, line.colour, { area: line.area, base: y(0), halo: line.halo });
   const marks = svgNode('g', {}, plot);
 
@@ -218,7 +223,8 @@ export function stackedColumns({ width, height, bins, categories, axisText, minS
       bandRect.style.display = i === null ? 'none' : '';
       if (i !== null) bandRect.setAttribute('x', round(i * slot));
       marks.replaceChildren();
-      if (i !== null && line) paint(svgNode('circle', { cx: round(points[i].x), cy: round(points[i].y), r: 4, class: 'line-dot series-fill' }, marks), line.colour);
+      // (A dot only where the line has one point per bin.)
+      if (i !== null && line && points.length === bins.length) paint(svgNode('circle', { cx: round(points[i].x), cy: round(points[i].y), r: 4, class: 'line-dot series-fill' }, marks), line.colour);
     },
     centreOf: (i) => i * slot + slot / 2,
   };

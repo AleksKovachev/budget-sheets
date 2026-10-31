@@ -886,6 +886,17 @@ function shownRange(period, rows) {
   return { ...period, to: minIso(period.to, latest) };
 }
 
+// A line over the columns of the sub-periods `bins`: the totals of the smallest sub-period offered, each
+// at the place of its middle day along the columns.
+function finestPoints(range, bins, rows) {
+  return makeBins(range, unitChoices(range)[0]).map((piece) => {
+    const middle = addDays(piece.from, Math.floor(daysBetween(piece.from, piece.to) / 2));
+    const i = bins.findIndex((bin) => middle <= bin.to);
+    const days = daysBetween(bins[i].from, bins[i].to) + 1;
+    return { at: i + (daysBetween(bins[i].from, middle) + 0.5) / days, value: sum(between(rows, piece.from, piece.to)) };
+  });
+}
+
 function drawTimeline(host, period, rows) {
   const width = host.clientWidth;
   const current = between(rows, period.from, period.to);
@@ -896,7 +907,9 @@ function drawTimeline(host, period, rows) {
     detailIndex = index;
     drawTimeline(host, period, rows);
   }));
-  box.querySelector('.timeline-unit').textContent = unitText(range, unit) + (range.to !== period.to ? `, up to ${isoToBg(range.to)}` : '');
+  const finest = unitChoices(range)[0];
+  const lineText = timelineView === 'both' && unit !== finest && !timelineTable ? `; the line per ${UNIT_NAMES[finest].toLowerCase()}` : '';
+  box.querySelector('.timeline-unit').textContent = unitText(range, unit) + (range.to !== period.to ? `, up to ${isoToBg(range.to)}` : '') + lineText;
 
   const categories = categoryTotals(current);
   if (!categories.length) {
@@ -929,7 +942,8 @@ function drawTimeline(host, period, rows) {
     line: {
       columns: null,
       line: { colour: COMPARE_COLOURS.current, area: true },
-      both: { colour: LINE_OVER_COLUMNS, halo: true },
+      // (Already the smallest: the line runs over the tops of the columns.)
+      both: { colour: LINE_OVER_COLUMNS, halo: true, points: unit === finest ? null : finestPoints(range, bins, current) },
     }[timelineView],
   });
   // The value axis stays put; the columns scroll sideways when they don't fit.
