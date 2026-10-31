@@ -38,7 +38,7 @@ never added below the end of those ranges.
 
 - **Row 4**: carry-over from the previous year, e.g. `From 2025`, in one of the cash-in columns depending
   on who owed whom. Formulas take it from the previous tab, e.g. `F4 = IF('2024'!O3 > 0, '2024'!O3, )`.
-  In 2026, F2:I3 convert the 2025 result from leva to euro (at the fixed rate, 1.95583 лв per €) for row 4.
+  In 2026, F2:I3 convert the 2025 result from lev to euro (at the fixed rate, 1.95583 лв per €) for row 4.
   (2022, the first year, has a normal entry in row 4.) The app never writes to row 4.
 - **Row 5 onwards**: entries, sorted by date.
 - **One blank row between months.** Each month is one block of rows.
@@ -62,8 +62,8 @@ below row 4 plus A2:J3 and P1:P3 (2026's lev→euro helper and currency note), a
 
 ## Currency
 
-Year tabs before 2026 are in leva (BGN), from 2026 in euro. For statistics across years,
-leva are converted at the fixed rate **1 EUR = 1.95583 BGN** (÷ 1.95583 to euro, × 1.95583 to leva).
+Year tabs before 2026 are in lev (BGN), from 2026 in euro. For statistics across years,
+lev are converted at the fixed rate **1 EUR = 1.95583 BGN** (÷ 1.95583 to euro, × 1.95583 to lev).
 
 ## Statistics: what each person paid
 

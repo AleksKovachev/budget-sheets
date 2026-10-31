@@ -30,6 +30,7 @@ const PATHS = {
   // Change spreadsheet: a sheet with a circular arrow.
   swapSheet: '<rect x="3.5" y="3.5" width="12" height="15" rx="1.5"/><path d="M6.5 8h6M6.5 11.5h6M6.5 15h3"/><path d="M20.5 13.5a4.5 4.5 0 0 1-7.6 3.3"/><path d="M20.8 9.8v3.9h-3.9"/>',
   table: '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15"/>',
+  filters: '<path d="M3.5 7H12M18 7h2.5M3.5 17H6M12 17h8.5"/><circle cx="15" cy="7" r="3"/><circle cx="9" cy="17" r="3"/>',
   // The records behind an amount: a list with a magnifying glass.
   records: '<path d="M3 6h14M3 11h6M3 16h4"/><circle cx="14.5" cy="14.5" r="4"/><path d="m17.5 17.5 3.5 3.5"/>',
   rowAbove: '<rect x="3.5" y="13" width="17" height="7" rx="1.5"/><path d="M12 3v7M8.5 6.5h7"/>',

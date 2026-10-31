@@ -10,10 +10,13 @@
 //                 their median, which one exceptional year doesn't pull up.
 //   While the shown period isn't over, "Up to today" compares only as many days of each (1–25 October with
 //   1–25 September); "Whole periods" compares with them in full.
+//
+// Filters (categories, the currency records were entered in, the size of a record) leave records out of
+// every widget and of everything they're compared with, so that like is compared with like.
 
 import { isConfigured, initAuth, signIn, dropToken, getAccessToken, watchIdle, IDLE_MS } from './auth.js';
 import { ApiError, quoteTab, getSpreadsheet, batchGetValues, spreadsheetUrl } from './sheets.js';
-import { isYearTab, parseYearTab, spending, convert } from './budget.js';
+import { isYearTab, parseYearTab, spending, convert, currencyOf } from './budget.js';
 import { isoToBg } from './dates.js';
 import { fixtureRequested, loadFixtureApi, showFixtureBanner } from './fixture.js';
 import {
@@ -236,7 +239,8 @@ async function syncNow() {
 }
 
 // Every entry of the read years as { date, key (category), name, amounts: { combined, <person>… }, entry,
-// tab } in the chosen currency. Carry-overs are left out (they move last year's balance, not spending).
+// tab, source (the currency it was entered in) } with the amounts in the chosen currency. Carry-overs are
+// left out (they move last year's balance, not spending).
 function spendingRows() {
   const rows = [];
   for (const title of titlesFor(picker.period)) {
@@ -250,7 +254,7 @@ function spendingRows() {
         const spent = spending(entry);
         const amounts = {};
         for (const [key, amount] of Object.entries(spent)) amounts[key] = convert(amount, year.year, currency);
-        rows.push({ date, key: categoryKey(entry.category), name: entry.category, amounts, entry, tab: title });
+        rows.push({ date, key: categoryKey(entry.category), name: entry.category, amounts, entry, tab: title, source: currencyOf(year.year) });
       }
     }
   }
@@ -470,6 +474,12 @@ function setUpChoices() {
     currency = currency === 'EUR' ? 'BGN' : 'EUR';
     choiceChanged();
   });
+  $('btn-filters').addEventListener('click', () => {
+    filtersOpen = !filtersOpen;
+    $('filters').hidden = !filtersOpen;
+    showFilterSummary();
+  });
+  showFilterSummary();
   showChoices();
 }
 
@@ -510,15 +520,275 @@ function showChoices() {
   const button = $('btn-currency');
   const euro = currency === 'EUR';
   button.replaceChildren(el('span', 'currency-code', currency));
-  button.title = `Amounts in ${euro ? 'euro (EUR)' : 'leva (BGN)'}. Click for ${euro ? 'leva (BGN)' : 'euro (EUR)'}; 1 EUR = ${BGN_PER_EUR} BGN.`;
+  button.title = `Amounts in ${euro ? 'euro (EUR)' : 'lev (BGN)'}. Click for ${euro ? 'lev (BGN)' : 'euro (EUR)'}; 1 EUR = ${BGN_PER_EUR} BGN.`;
   button.setAttribute('aria-label', button.title);
+}
+
+// ---- Filters ----
+
+let allRows = []; // Every record of the read years; the filters pick from these.
+let filtersOpen = false;
+const hiddenCategories = new Set(); // Category keys left out. (A category not seen before counts.)
+let recordCurrency = 'all'; // Only records entered in this currency: 'all' | 'EUR' | 'BGN'
+// The size of a single record, in euro (so that switching the shown currency doesn't change them by
+// rounding). null: no limit, which is what the ends of the slider mean.
+let amountFrom = null;
+let amountTo = null;
+
+const shownAmount = (euro) => (currency === 'EUR' ? euro : euro * BGN_PER_EUR);
+const toEuro = (amount) => (currency === 'EUR' ? amount : amount / BGN_PER_EUR);
+const roundCents = (amount) => Math.round(amount * 100) / 100;
+
+function passesFilters(row) {
+  if (hiddenCategories.has(row.key)) return false;
+  if (recordCurrency !== 'all' && row.source !== recordCurrency) return false;
+  // The size of the whole record, whoever is shown, so that the people still add up to the total. (A refund
+  // counts by its size. The half a cent: the limits are typed in cents, the amounts may have more decimals
+  // after converting.)
+  const size = Math.abs(row.amounts.combined);
+  if (amountFrom !== null && size < shownAmount(amountFrom) - 0.005) return false;
+  return amountTo === null || size <= shownAmount(amountTo) + 0.005;
+}
+
+// The top of the amount range: the largest record of the shown period, whatever else is filtered.
+function largestRecord() {
+  const { from, to } = picker.period;
+  return Math.max(1, Math.ceil(Math.max(0, ...between(allRows, from, to).map((r) => Math.abs(r.amounts.combined)))));
+}
+
+const wholeMoney = (amount) => `${new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 }).format(amount)} ${SYMBOL[currency]}`;
+
+function filtersChanged() {
+  showFilterSummary();
+  renderWidgets();
+}
+
+function clearFilters() {
+  hiddenCategories.clear();
+  recordCurrency = 'all';
+  amountFrom = null;
+  amountTo = null;
+  render();
+}
+
+// The Filters button with how many are on, and a line saying what is left out, also while the panel is closed
+// (so that filtered amounts are never taken for the whole picture).
+function showFilterSummary() {
+  const parts = [];
+  if (hiddenCategories.size) {
+    const names = categoryTotals(allRows, true);
+    const shown = names.filter((c) => !hiddenCategories.has(c.key));
+    parts.push(shown.length && shown.length <= 3 ? `only ${shown.map((c) => c.name).join(', ')}` : `${shown.length} of ${names.length} categories`);
+  }
+  if (recordCurrency !== 'all') parts.push(`records entered in ${recordCurrency}`);
+  if (amountFrom !== null || amountTo !== null) {
+    const from = amountFrom === null ? null : money(shownAmount(amountFrom));
+    const to = amountTo === null ? null : money(shownAmount(amountTo));
+    parts.push(from && to ? `records of ${from} to ${to}` : from ? `records of ${from} or more` : `records of up to ${to}`);
+  }
+
+  const button = $('btn-filters');
+  button.replaceChildren(icon('filters'), el('span', null, parts.length ? `Filters (${parts.length})` : 'Filters'));
+  button.classList.toggle('active', filtersOpen);
+  button.setAttribute('aria-expanded', String(filtersOpen));
+
+  const summary = $('filter-summary');
+  summary.hidden = !parts.length;
+  if (!parts.length) return;
+  const clear = el('button', 'link', 'Clear');
+  clear.type = 'button';
+  clear.addEventListener('click', clearFilters);
+  summary.replaceChildren(el('span', 'muted', `Showing ${parts.join(', ')}.`), clear);
+}
+
+function renderFilters() {
+  $('filters').hidden = !filtersOpen;
+  $('filters').replaceChildren(categoriesFilter(), currencyFilter(), amountFilter());
+}
+
+// Tick the categories to count: all of them to start with.
+function categoriesFilter() {
+  const group = el('div', 'filter-group filter-categories');
+  const head = el('div', 'filter-head');
+  const count = el('span', 'muted');
+  const categories = categoryTotals(allRows, true).sort((a, b) => a.name.localeCompare(b.name));
+  const showCount = () => {
+    count.textContent = `${categories.filter((c) => !hiddenCategories.has(c.key)).length} of ${categories.length}`;
+  };
+  const list = el('div', 'filter-list');
+  const boxes = categories.map((category) => {
+    const label = el('label', 'filter-check');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = !hiddenCategories.has(category.key);
+    box.addEventListener('change', () => {
+      if (box.checked) hiddenCategories.delete(category.key);
+      else hiddenCategories.add(category.key);
+      showCount();
+      filtersChanged();
+    });
+    label.append(box, categoryBadge(category), el('span', null, category.name));
+    list.append(label);
+    return { box, category };
+  });
+  const allOrNone = (text, hide) => {
+    const button = el('button', 'link', text);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      for (const { box, category } of boxes) {
+        box.checked = !hide;
+        if (hide) hiddenCategories.add(category.key);
+        else hiddenCategories.delete(category.key);
+      }
+      showCount();
+      filtersChanged();
+    });
+    return button;
+  };
+  showCount();
+  head.append(el('h4', null, 'Categories'), count, allOrNone('All', false), allOrNone('None', true));
+  group.append(head, list);
+  return group;
+}
+
+function currencyFilter() {
+  const group = el('div', 'filter-group');
+  const head = el('div', 'filter-head');
+  head.append(el('h4', null, 'Entered in'));
+  const switcher = el('span', 'timeline-detail');
+  const draw = () => switcher.replaceChildren(segmented([['all', 'All'], ['EUR', 'EUR'], ['BGN', 'BGN']], recordCurrency, (value) => {
+    recordCurrency = value;
+    draw();
+    filtersChanged();
+  }, 'Only records entered in'));
+  draw();
+  group.append(head, switcher, el('p', 'muted filter-hint', 'Which records count, by the currency they were entered in. The EUR / BGN button above only changes how amounts are shown.'));
+  return group;
+}
+
+// Two handles on one track, and the same two limits as fields.
+function amountFilter() {
+  const group = el('div', 'filter-group');
+  const top = largestRecord();
+  const head = el('div', 'filter-head');
+  const reset = el('button', 'icon-button filter-reset');
+  reset.type = 'button';
+  reset.append(icon('reset'));
+  reset.title = 'All amounts';
+  reset.setAttribute('aria-label', reset.title);
+  head.append(el('h4', null, 'Amount range'), reset);
+
+  const handle = (label) => {
+    const input = el('input');
+    input.type = 'range';
+    input.min = '0';
+    input.max = String(top);
+    input.step = '1';
+    input.setAttribute('aria-label', label);
+    return input;
+  };
+  const low = handle('Smallest amount');
+  const high = handle('Largest amount');
+  const fill = el('div', 'range-fill');
+  const slider = el('div', 'range-slider');
+  slider.append(el('div', 'range-track'), fill, low, high);
+  const ends = el('div', 'muted range-ends');
+  ends.append(el('span', null, wholeMoney(0)), el('span', null, wholeMoney(top)));
+
+  const field = (label) => {
+    const input = el('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = 'any';
+    input.inputMode = 'decimal';
+    input.setAttribute('aria-label', label);
+    return input;
+  };
+  const fromField = field('Smallest amount');
+  const toField = field('Largest amount');
+  const fields = el('div', 'range-fields');
+  fields.append(fromField, el('span', 'muted', '–'), toField);
+
+  // The handles show their positions in the track (their centres don't reach its very ends).
+  const place = () => {
+    const at = (input) => Number(input.value) / top;
+    fill.style.left = `calc(${at(low)} * (100% - 24px) + 12px)`;
+    fill.style.right = `calc(${1 - at(high)} * (100% - 24px) + 12px)`;
+    // (Both at the top: the lower one must stay reachable.)
+    low.style.zIndex = Number(low.value) >= top ? '2' : '';
+  };
+  // Everything as the limits say.
+  const show = () => {
+    const from = amountFrom === null ? 0 : roundCents(shownAmount(amountFrom));
+    const to = amountTo === null ? top : roundCents(shownAmount(amountTo));
+    low.value = String(Math.min(top, Math.round(from)));
+    high.value = String(Math.min(top, Math.round(to)));
+    fromField.value = String(from);
+    toField.value = String(to);
+    reset.hidden = amountFrom === null && amountTo === null;
+    place();
+  };
+  const apply = () => {
+    show();
+    filtersChanged();
+  };
+
+  // While dragging, only the handle and the fields move; the widgets follow when it's let go.
+  low.addEventListener('input', () => {
+    low.value = String(Math.min(Number(low.value), Number(high.value)));
+    fromField.value = low.value;
+    place();
+  });
+  high.addEventListener('input', () => {
+    high.value = String(Math.max(Number(low.value), Number(high.value)));
+    toField.value = high.value;
+    place();
+  });
+  low.addEventListener('change', () => {
+    amountFrom = Number(low.value) > 0 ? toEuro(Number(low.value)) : null;
+    apply();
+  });
+  high.addEventListener('change', () => {
+    amountTo = Number(high.value) < top ? toEuro(Number(high.value)) : null;
+    apply();
+  });
+  // A field left empty means no limit; limits that cross move the other one along.
+  fromField.addEventListener('change', () => {
+    const value = Number(fromField.value);
+    amountFrom = value > 0 ? toEuro(value) : null;
+    if (amountFrom !== null && amountTo !== null && amountTo < amountFrom) amountTo = amountFrom;
+    apply();
+  });
+  toField.addEventListener('change', () => {
+    const value = toField.value === '' ? top : Math.max(0, Number(toField.value));
+    amountTo = value < top ? toEuro(value) : null;
+    if (amountFrom !== null && amountTo !== null && amountFrom > amountTo) amountFrom = amountTo;
+    apply();
+  });
+  reset.addEventListener('click', () => {
+    amountFrom = null;
+    amountTo = null;
+    apply();
+  });
+  show();
+
+  group.append(head, slider, ends, fields, el('p', 'muted filter-hint', `The size of a single record, in ${currency === 'EUR' ? 'euro' : 'lev'}, up to the largest in this period.`));
+  return group;
 }
 
 // ---- Widgets ----
 
 function render() {
+  allRows = spendingRows();
+  renderFilters();
+  showFilterSummary();
+  renderWidgets();
+}
+
+// Draws the widgets from the records the filters let through.
+function renderWidgets() {
   const period = picker.period;
-  const rows = spendingRows();
+  const rows = allRows.filter(passesFilters);
   const compared = comparisons(period, rows);
   renderDashboard(period, compared);
   renderCategories(period, rows, compared);
@@ -528,7 +798,8 @@ function render() {
   $('stats-note').textContent = 'How amounts are counted: Combined is everything paid, including cash in. '
     + 'A person\'s amount is what they actually paid: everything in their "Paid" and "Cash in" columns, in full '
     + '("Personal" is already part of "Paid"). Carry-overs from the year before are left out. '
-    + `Leva and euro are converted at the fixed rate 1 EUR = ${BGN_PER_EUR} BGN.`;
+    + 'Filters apply to everything shown, also to the periods it is compared with. '
+    + `Lev and euro are converted at the fixed rate 1 EUR = ${BGN_PER_EUR} BGN.`;
 }
 
 // Tooltip lines comparing `now` with all three (last period, usual average, usual median), for `key`.

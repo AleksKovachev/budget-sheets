@@ -518,7 +518,7 @@ function renderTotals() {
   fitTotals();
   const mixed = new Set(data.years.map((y) => y.currency)).size > 1;
   const note = $('totals-note');
-  note.textContent = `Carry-overs not counted.${mixed ? ` Leva converted at 1 € = ${BGN_PER_EUR} лв.` : ''}`;
+  note.textContent = `Carry-overs not counted.${mixed ? ` Lev converted at 1 € = ${BGN_PER_EUR} лв.` : ''}`;
   note.hidden = false;
 }
 
