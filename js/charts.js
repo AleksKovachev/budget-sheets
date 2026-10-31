@@ -1,4 +1,4 @@
-// Charts of the statistics page, drawn as SVG: gauges, a donut and stacked columns.
+// Charts of the statistics page, drawn as SVG: gauges, a donut, stacked columns and lines.
 // Chart chrome (grid lines, axis text) is coloured by CSS, so it follows the theme. Series colours are
 // pairs [light, dark] (config.js CHART_COLOURS), passed as CSS variables for the same reason.
 // Names are always set with textContent (they come from the sheet).
@@ -132,9 +132,12 @@ function niceTicks(lo, hi, count = 4) {
 // bins: [{ label (axis), values: Map key -> amount }]; categories: [{ key, colour }] in stacking order
 // (first at the base line). axisText(v) formats the value axis. The columns get at least `minSlot` px
 // each: when they don't fit into `width`, the plot is wider (the page lets it scroll sideways).
+// columns: whether to draw them. line (optional): { colour, area, halo }, a line through the bins' totals,
+// over the columns; area: a fading wash under it; halo: an edge in the card's colour, to stand out from them.
+// Everything stays in the same place with or without either.
 // Returns { axis, plot, scrolls, binAt(x), band(i), centreOf(i) }: axis holds the value labels (it stays
 // in place), plot everything else; x positions are CSS pixels from the plot's left edge.
-export function stackedColumns({ width, height, bins, categories, axisText, minSlot }) {
+export function stackedColumns({ width, height, bins, categories, axisText, minSlot, columns = true, line = null }) {
   const sums = bins.map((bin) => {
     let up = 0;
     let down = 0;
@@ -169,7 +172,7 @@ export function stackedColumns({ width, height, bins, categories, axisText, minS
   const bandRect = svgNode('rect', { x: 0, y: top - 4, width: round(slot), height: bottom - top + 4, rx: 4, class: 'col-band' }, plot);
   bandRect.style.display = 'none';
 
-  bins.forEach((bin, i) => {
+  if (columns) bins.forEach((bin, i) => {
     const x = round(i * slot + (slot - barWidth) / 2);
     for (const direction of [1, -1]) {
       const parts = categories
@@ -201,6 +204,11 @@ export function stackedColumns({ width, height, bins, categories, axisText, minS
     label.textContent = bin.label;
   });
 
+  // The total of each bin: on the top of its column (with no refunds in it).
+  const points = bins.map((_, i) => ({ x: i * slot + slot / 2, y: y(sums[i].up + sums[i].down) }));
+  if (line) drawLine(plot, points, line.colour, { area: line.area, base: y(0), halo: line.halo });
+  const marks = svgNode('g', {}, plot);
+
   return {
     axis,
     plot,
@@ -209,7 +217,107 @@ export function stackedColumns({ width, height, bins, categories, axisText, minS
     band: (i) => {
       bandRect.style.display = i === null ? 'none' : '';
       if (i !== null) bandRect.setAttribute('x', round(i * slot));
+      marks.replaceChildren();
+      if (i !== null && line) paint(svgNode('circle', { cx: round(points[i].x), cy: round(points[i].y), r: 4, class: 'line-dot series-fill' }, marks), line.colour);
     },
     centreOf: (i) => i * slot + slot / 2,
+  };
+}
+
+// ---- Lines: amounts over the same positions, on one value axis ----
+
+// Curve pieces through the points, one per gap: smooth, but never bulging past the amounts it joins.
+function curvePieces(points) {
+  const slopes = points.slice(1).map((p, i) => (p.y - points[i].y) / (p.x - points[i].x));
+  const tangent = (i) => {
+    if (i === 0) return slopes[0];
+    if (i === slopes.length) return slopes.at(-1);
+    const [a, b] = [slopes[i - 1], slopes[i]];
+    return a * b <= 0 ? 0 : (2 * a * b) / (a + b);
+  };
+  return slopes.map((_, i) => {
+    const [p, q] = [points[i], points[i + 1]];
+    const third = (q.x - p.x) / 3;
+    return `C ${round(p.x + third)} ${round(p.y + tangent(i) * third)} ${round(q.x - third)} ${round(q.y - tangent(i + 1) * third)} ${round(q.x)} ${round(q.y)}`;
+  });
+}
+
+let areaCount = 0; // (Each area's fade needs an id of its own.)
+
+// A line through the points (one point: a dot). area: a fading wash down to the height `base`.
+// halo: an edge in the card's colour under the line.
+function drawLine(svg, points, colour, { area, base, halo }) {
+  if (!points.length) return;
+  if (points.length === 1) {
+    paint(svgNode('circle', { cx: round(points[0].x), cy: round(points[0].y), r: 4, class: 'series-fill' }, svg), colour);
+    return;
+  }
+  const start = `M ${round(points[0].x)} ${round(points[0].y)}`;
+  const pieces = curvePieces(points);
+  if (area) {
+    const id = `area-fade-${++areaCount}`;
+    const fade = paint(svgNode('linearGradient', { id, x1: 0, y1: 0, x2: 0, y2: 1 }, svgNode('defs', {}, svg)), colour);
+    svgNode('stop', { offset: 0, 'stop-opacity': 0.3, class: 'series-stop' }, fade);
+    svgNode('stop', { offset: 1, 'stop-opacity': 0, class: 'series-stop' }, fade);
+    svgNode('path', { d: `${start} ${pieces.join(' ')} L ${round(points.at(-1).x)} ${round(base)} L ${round(points[0].x)} ${round(base)} Z`, fill: `url(#${id})` }, svg);
+  }
+  if (halo) svgNode('path', { d: `${start} ${pieces.join(' ')}`, class: 'line-mark line-halo' }, svg);
+  paint(svgNode('path', { d: `${start} ${pieces.join(' ')}`, class: 'line-mark series-stroke' }, svg), colour);
+}
+
+// count: positions along the bottom. labels: axis text per position ('' for none; as many are shown as fit
+// without touching). lines: [{ colour, values (from position 0; may end early), area }], drawn in this order
+// (the last on top); area: a fading wash under the line. axisText(v) formats the value axis.
+// Returns { svg, at(x), mark(i), xOf(i) }: x positions are CSS pixels from the chart's left edge; mark(i)
+// shows a line and dots at a position (null: none).
+export function lineChart({ width, height, count, labels, lines, axisText }) {
+  const all = lines.flatMap((line) => line.values);
+  const ticks = niceTicks(Math.min(0, ...all), Math.max(0, ...all) || 1);
+  const top = 8;
+  const bottom = height - 24; // Room for the labels.
+  const left = Math.max(...ticks.map((t) => axisText(t).length)) * 7 + 12;
+  const right = Math.floor(width) - 10;
+  const step = count > 1 ? (right - left) / (count - 1) : 0;
+  const xOf = (i) => (count > 1 ? left + i * step : (left + right) / 2);
+  const y = (v) => bottom - ((v - ticks[0]) / (ticks.at(-1) - ticks[0])) * (bottom - top);
+
+  const svg = svgNode('svg', { width: Math.floor(width), height, viewBox: `0 0 ${Math.floor(width)} ${height}`, class: 'line-svg', 'aria-hidden': 'true' });
+  for (const t of ticks) {
+    svgNode('line', { x1: left, x2: right, y1: round(y(t)), y2: round(y(t)), class: t === 0 ? 'axis-zero' : 'grid-line' }, svg);
+    const label = svgNode('text', { x: left - 8, y: round(y(t)), class: 'axis-text', 'text-anchor': 'end', 'dominant-baseline': 'middle' }, svg);
+    label.textContent = axisText(t);
+  }
+
+  // Labels, as many as fit without touching (always the first one).
+  const room = Math.max(...labels.map((text) => text.length)) * 6.5 + 10;
+  let lastX = -Infinity;
+  labels.forEach((text, i) => {
+    if (!text || xOf(i) - lastX < room) return;
+    lastX = xOf(i);
+    // Labels near the edges are aligned so they stay inside the chart.
+    const half = (text.length * 6.5) / 2;
+    const anchor = xOf(i) - half < left - 12 ? 'start' : xOf(i) + half > width ? 'end' : 'middle';
+    const label = svgNode('text', { x: round(xOf(i)), y: height - 6, class: 'axis-text', 'text-anchor': anchor }, svg);
+    label.textContent = text;
+  });
+
+  for (const line of lines) {
+    drawLine(svg, line.values.map((v, i) => ({ x: xOf(i), y: y(v) })), line.colour, { area: line.area, base: y(0) });
+  }
+
+  const marks = svgNode('g', {}, svg);
+  return {
+    svg,
+    at: (px) => (count > 1 ? Math.min(count - 1, Math.max(0, Math.round((px - left) / step))) : 0),
+    xOf,
+    mark: (i) => {
+      marks.replaceChildren();
+      if (i === null) return;
+      svgNode('line', { x1: round(xOf(i)), x2: round(xOf(i)), y1: top, y2: bottom, class: 'line-cursor' }, marks);
+      for (const line of lines) {
+        if (i >= line.values.length) continue;
+        paint(svgNode('circle', { cx: round(xOf(i)), cy: round(y(line.values[i])), r: 4, class: 'line-dot series-fill' }, marks), line.colour);
+      }
+    },
   };
 }

@@ -1094,6 +1094,8 @@ dialog.modal::backdrop { background: var(--overlay); }
   .widgets { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); grid-template-rows: auto 1fr; }
   .widget-dashboard, .widget-timeline { grid-column: 1; }
   .widget-categories { grid-column: 2; grid-row: 1 / span 2; }
+  /* The next row: on the right (a widget still to come takes the left). */
+  .widget-compare { grid-column: 2; grid-row: 3; }
 }
 /* No tap highlight (Chrome on Android draws a blue box around a tapped donut piece): the widgets show
    what was picked themselves. */
@@ -1194,6 +1196,24 @@ dialog.modal::backdrop { background: var(--overlay); }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; color: var(--muted); }
 .chart-legend li { display: inline-flex; align-items: center; gap: 5px; }
 .legend-swatch { width: 10px; height: 10px; border-radius: 3px; }
+/* Expense trend and period to period comparison */
+.line-chart { position: relative; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.line-chart:focus { outline: none; }
+.line-chart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.line-svg { display: block; }
+.line-mark { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.line-halo { stroke: var(--surface); stroke-width: 5; }
+.line-cursor { stroke: var(--grid-line); stroke-width: 1; shape-rendering: crispEdges; }
+.line-dot { stroke: var(--surface); stroke-width: 2; }
+.series-stop { stop-color: var(--c-dark); }
+:root[data-theme="light"] .series-stop { stop-color: var(--c-light); }
+.widget-timeline .widget-sub { margin-top: 8px; }
+/* One row per line: colour, name and dates, amount, how the current period differs from it. */
+.compare-legend { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px 8px; list-style: none; margin: 10px 0 0; padding: 0; font-size: 13px; }
+.compare-legend li { display: contents; }
+.compare-name { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.compare-name .muted { font-size: 12px; }
+.compare-amount { font-weight: 600; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .stats-table-wrap { overflow-x: auto; }
 .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .stats-table th, .stats-table td { padding: 5px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }

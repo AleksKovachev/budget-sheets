@@ -65,12 +65,12 @@ below row 4 plus A2:J3 and P1:P3 (2026's lev→euro helper and currency note), a
 Year tabs before 2026 are in leva (BGN), from 2026 in euro. For statistics across years,
 leva are converted at the fixed rate **1 EUR = 1.95583 BGN** (÷ 1.95583 to euro, × 1.95583 to leva).
 
-## Statistics: what each person spent
+## Statistics: what each person paid
 
-Per entry (budget.js `spending()`), with shared = (D − E) + (G − H):
+Per entry (budget.js `spending()`):
 
-- Aleks: E + shared / 2 + I (his personal part, half of everything shared, and what Iliyana paid only for him)
-- Iliyana: H + shared / 2 + F
+- Aleks: D + F (everything he paid and his cash in, in full; E is a part of D, so it adds nothing)
+- Iliyana: G + I
 - Combined: the two together = D + G + F + I (everything paid, including cash in)
 
 The carry-over (row 4) is not spending and is left out.

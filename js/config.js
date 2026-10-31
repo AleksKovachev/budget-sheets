@@ -87,6 +87,14 @@ export const CHART_COLOURS = {
 };
 // Categories the app doesn't know, and entries without a category.
 export const OTHER_CHART_COLOUR = ['#55554f', '#6e6e68'];
+// The lines of the period comparison (and the total's line in Expenses over time): [light theme, dark theme].
+export const COMPARE_COLOURS = {
+  current: ['#2a78d6', '#3987e5'],
+  previous: ['#d6409f', '#dc5aac'],
+  yearAgo: ['#c98500', '#c98500'],
+};
+// The total's line over the columns: dark or light, as no category colour may be mistaken for it.
+export const LINE_OVER_COLUMNS = ['#1d2024', '#f2f3f5'];
 
 // Badge colours from a category colour: a lighter tint for the circle and a darker, more saturated shade
 // of the same hue for the icon (greys stay grey).

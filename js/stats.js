@@ -1,6 +1,6 @@
 // Statistics page: how much was spent, by whom and on what, in a chosen period.
 // Opened from the main page with its period (stats.html?from=…&to=…&kind=…; a month card passes its month).
-// One row of choices above the widgets: period, whose spending (both together or one person's part, see
+// One row of choices above the widgets: period, whose spending (both together or what one person paid, see
 // budget.js spending()), how a period that isn't over yet is compared, and currency (lev ↔ euro at the
 // fixed rate). Read-only; kept in sync like the other pages.
 //
@@ -24,8 +24,8 @@ import { icon, categoryIcon } from './icons.js';
 import { startSync, PAST_YEARS_MS } from './sync.js';
 import { PeriodPicker, monthPeriod, yearPeriod, todayIso, shift, periodQuery, periodFromQuery } from './period.js';
 import { addDays, addMonths, daysBetween, monthStart, monthTitle, weekStart, shortMonth, toIso } from './calendar.js';
-import { PEOPLE, BGN_PER_EUR, categoryKey, categoryStyle, CHART_COLOURS, OTHER_CHART_COLOUR } from './config.js';
-import { gauge, donut, stackedColumns } from './charts.js';
+import { PEOPLE, BGN_PER_EUR, categoryKey, categoryStyle, CHART_COLOURS, OTHER_CHART_COLOUR, COMPARE_COLOURS, LINE_OVER_COLUMNS } from './config.js';
+import { gauge, donut, stackedColumns, lineChart } from './charts.js';
 
 const VIEWS = ['view-message', 'view-signin', 'view-stats'];
 const WHO = [{ key: 'combined', name: 'Combined' }, ...PEOPLE];
@@ -521,10 +521,11 @@ function render() {
   const compared = comparisons(period, rows);
   renderDashboard(period, compared);
   renderCategories(period, rows, compared);
-  renderTimeline(period, rows);
+  renderTimeline(period, rows, compared);
+  renderCompare(period, rows, compared);
   $('stats-note').textContent = 'How amounts are counted: Combined is everything paid, including cash in. '
-    + "A person's part is their own personal amounts, half of every shared amount (paid minus personal, "
-    + "whoever paid it) and the other's cash in for them. Carry-overs from the year before are left out. "
+    + 'A person\'s amount is what they actually paid: everything in their "Paid" and "Cash in" columns, in full '
+    + '("Personal" is already part of "Paid"). Carry-overs from the year before are left out. '
     + `Leva and euro are converted at the fixed rate 1 EUR = ${BGN_PER_EUR} BGN.`;
 }
 
@@ -690,6 +691,18 @@ function renderCategories(period, rows, compared) {
   box.replaceChildren(widgetHead('Expenses by category', whoTag()), top, ring, list);
 }
 
+// "↑ +12%" in the colour of more or less spending (diff: from change()).
+function deltaPill(diff) {
+  const delta = el('span', `delta${diff > 0 ? ' delta-up' : diff < 0 ? ' delta-down' : ''}`);
+  if (diff === null) {
+    delta.textContent = 'nothing then';
+  } else {
+    if (diff) delta.append(icon(diff > 0 ? 'arrowUpSmall' : 'arrowDownSmall'));
+    delta.append(`${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${Math.abs(diff)}%`);
+  }
+  return delta;
+}
+
 // Lines like "vs 01.09 – 25.09.2026  ↑ +12%" for the last period and the usual amount.
 function comparisonLines(period, compared) {
   const box = el('div', 'cat-compare');
@@ -698,14 +711,7 @@ function comparisonLines(period, compared) {
   const now = compared.current.totals[who];
   const before = base.totals[who];
   const row = el('div', 'compare-line');
-  const diff = change(now, before);
-  const delta = el('span', `delta${diff > 0 ? ' delta-up' : diff < 0 ? ' delta-down' : ''}`);
-  if (diff === null) {
-    delta.textContent = 'nothing then';
-  } else {
-    if (diff) delta.append(icon(diff > 0 ? 'arrowUpSmall' : 'arrowDownSmall'));
-    delta.append(`${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${Math.abs(diff)}%`);
-  }
+  const delta = deltaPill(change(now, before));
   const label = compareWith === 'last' ? `vs ${rangeText(base.from, base.to)}` : `vs ${BASES[compareWith].caption.toLowerCase()}`;
   row.append(el('span', 'muted', label), delta);
   // The tooltip: all three comparisons, and what they are.
@@ -715,7 +721,7 @@ function comparisonLines(period, compared) {
   return box;
 }
 
-// ---- Expenses over time: stacked columns per sub-period, as detailed as picked ----
+// ---- Expenses over time: per sub-period, as detailed as picked: stacked columns, a line of the totals or both ----
 
 const UNIT_NAMES = { day: 'Day', week: 'Week', '2weeks': '2 weeks', month: 'Month', quarter: 'Quarter', year: 'Year' };
 const UNIT_TEXT = {
@@ -728,12 +734,53 @@ const UNIT_TEXT = {
 };
 const pad = (n) => String(n).padStart(2, '0');
 
-// The three levels of detail offered for a period, most detailed first.
+// The levels of detail offered for a period, most detailed first. (Under a week: only days. A week: no
+// calendar weeks, which would make one column.)
 function unitChoices(period) {
   const days = daysBetween(period.from, period.to) + 1;
-  if (days <= 31) return ['day', 'week', '2weeks'];
+  if (days < 7) return ['day'];
+  if (days === 7) return ['day', 'days'];
+  if (days <= 31) return ['day', 'days', 'week'];
   if (days <= 366) return ['week', '2weeks', 'month'];
   return ['month', 'quarter', 'year'];
+}
+
+// A level picked in a switch (index: its place there), on a period that may offer fewer levels.
+const pickedUnit = (choices, index) => choices[Math.min(index, choices.length - 1)];
+
+// The period cut into pieces of about `size` days, whose lengths differ by one day at most (so that no
+// short piece at the end looks like a drop in spending).
+function evenPieces(period, size) {
+  const days = daysBetween(period.from, period.to) + 1;
+  const count = Math.ceil(days / size);
+  const pieces = [];
+  let from = period.from;
+  for (let i = 0; i < count; i++) {
+    const length = Math.floor(days / count) + (i < days % count ? 1 : 0);
+    const to = addDays(from, length - 1);
+    pieces.push({ from, to, start: from });
+    from = addDays(to, 1);
+  }
+  return pieces;
+}
+
+const PIECE_DAYS = 4;
+
+// "3–4 days" (or "4 days"): how long the pieces of the 'days' level are in this period.
+function pieceLength(period) {
+  const lengths = evenPieces(period, PIECE_DAYS).map((b) => daysBetween(b.from, b.to) + 1);
+  const [few, many] = [Math.min(...lengths), Math.max(...lengths)];
+  return `${few === many ? few : `${few}–${many}`} days`;
+}
+
+const unitName = (period, unit) => (unit === 'days' ? pieceLength(period) : UNIT_NAMES[unit]);
+const unitText = (period, unit) => (unit === 'days' ? `Per ${pieceLength(period)}` : UNIT_TEXT[unit]);
+
+// The switch of the levels offered for the period (nothing, when there's only one).
+function detailSwitch(period, unit, onPick) {
+  const choices = unitChoices(period);
+  if (choices.length < 2) return el('span');
+  return segmented(choices.map((u) => [u, unitName(period, u)]), unit, (u) => onPick(choices.indexOf(u)), 'How detailed');
 }
 
 function unitStart(iso, unit) {
@@ -753,6 +800,7 @@ function nextStart(start, unit) {
 
 // Sub-periods of `unit` covering the period (the first and last cut to it).
 function makeBins(period, unit) {
+  if (unit === 'days') return evenPieces(period, PIECE_DAYS);
   const bins = [];
   for (let s = unitStart(period.from, unit); s <= period.to; s = nextStart(s, unit)) {
     bins.push({ from: maxIso(s, period.from), to: minIso(addDays(nextStart(s, unit), -1), period.to), start: s });
@@ -765,6 +813,7 @@ function binLabels(bin, unit, manyYears) {
   const yy = `'${y.slice(2)}`;
   switch (unit) {
     case 'day': return { axis: `${Number(d)} ${shortMonth(bin.start)}`, title: isoToBg(bin.from) };
+    case 'days':
     case 'week':
     case '2weeks': return { axis: `${Number(bin.from.slice(8))} ${shortMonth(bin.from)}`, title: rangeText(bin.from, bin.to) };
     case 'month': return { axis: manyYears ? `${shortMonth(bin.start)} ${yy}` : shortMonth(bin.start), title: monthTitle(bin.start) };
@@ -779,6 +828,8 @@ function binLabels(bin, unit, manyYears) {
 // Narrowest column (with its gap) before the chart scrolls sideways; wider for fingers.
 const minSlot = () => (window.matchMedia('(pointer: coarse)').matches ? 14 : 8);
 
+const TIMELINE_VIEWS = [['columns', 'Bars'], ['line', 'Graph'], ['both', 'Both']];
+let timelineView = 'columns';
 let timelineTable = false; // Shown as a table instead of the chart.
 let timelineWidth = 0;
 let timelineData = null; // { period, rows } of the last render, for redrawing at another width.
@@ -786,27 +837,42 @@ let timelineData = null; // { period, rows } of the last render, for redrawing a
 // The level of detail: the one picked (detailIndex), otherwise the most detailed that fits the width.
 function chosenUnit(period, width) {
   const choices = unitChoices(period);
-  if (detailIndex !== null) return choices[detailIndex];
+  if (detailIndex !== null) return pickedUnit(choices, detailIndex);
   return choices.find((u) => makeBins(period, u).length * minSlot() <= width - 50) || choices.at(-1);
 }
 
-function renderTimeline(period, rows) {
+// The button that switches a widget between its chart and a table.
+function tableSwitch(active, onClick) {
+  const toggle = el('button', `icon-button${active ? ' active' : ''}`);
+  toggle.type = 'button';
+  toggle.append(icon('table'));
+  toggle.title = active ? 'Show as a chart' : 'Show as a table';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.setAttribute('aria-pressed', String(active));
+  toggle.addEventListener('click', onClick);
+  return toggle;
+}
+
+function renderTimeline(period, rows, compared) {
   timelineData = { period, rows };
   const box = $('w-timeline');
   const host = el('div', 'timeline-host');
-  const toggle = el('button', `icon-button${timelineTable ? ' active' : ''}`);
-  toggle.type = 'button';
-  toggle.append(icon('table'));
-  toggle.title = timelineTable ? 'Show as a chart' : 'Show as a table';
-  toggle.setAttribute('aria-label', toggle.title);
-  toggle.setAttribute('aria-pressed', String(timelineTable));
-  toggle.addEventListener('click', () => {
+  const toggle = tableSwitch(timelineTable, () => {
     timelineTable = !timelineTable;
-    renderTimeline(period, rows);
+    renderTimeline(period, rows, compared);
   });
+  const top = el('div', 'cat-top');
+  const headline = el('div', 'cat-total');
+  headline.append(el('span', 'muted', period.label), el('strong', null, money(sum(between(rows, period.from, period.to)))));
+  top.append(headline, comparisonLines(period, compared));
   // The level of detail sits in the header, left of the table switch (drawTimeline fills it).
   const detail = el('span', 'timeline-detail');
-  box.replaceChildren(widgetHead('Expenses over time', whoTag(), detail, toggle), el('div', 'widget-sub muted timeline-unit'), host);
+  // (A table is the same with any of the views.)
+  const view = timelineTable ? el('span') : segmented(TIMELINE_VIEWS, timelineView, (value) => {
+    timelineView = value;
+    renderTimeline(period, rows, compared);
+  }, 'How to draw it');
+  box.replaceChildren(widgetHead('Expenses over time', whoTag(), view, detail, toggle), top, el('div', 'widget-sub muted timeline-unit'), host);
   timelineWidth = host.clientWidth;
   drawTimeline(host, period, rows);
 }
@@ -825,13 +891,12 @@ function drawTimeline(host, period, rows) {
   const current = between(rows, period.from, period.to);
   const range = shownRange(period, current);
   const unit = chosenUnit(range, width);
-  const choices = unitChoices(range);
   const box = host.parentElement;
-  box.querySelector('.timeline-detail').replaceChildren(segmented(choices.map((u) => [u, UNIT_NAMES[u]]), unit, (u) => {
-    detailIndex = choices.indexOf(u);
+  box.querySelector('.timeline-detail').replaceChildren(detailSwitch(range, unit, (index) => {
+    detailIndex = index;
     drawTimeline(host, period, rows);
-  }, 'How detailed'));
-  box.querySelector('.timeline-unit').textContent = UNIT_TEXT[unit] + (range.to !== period.to ? `, up to ${isoToBg(range.to)}` : '');
+  }));
+  box.querySelector('.timeline-unit').textContent = unitText(range, unit) + (range.to !== period.to ? `, up to ${isoToBg(range.to)}` : '');
 
   const categories = categoryTotals(current);
   if (!categories.length) {
@@ -854,14 +919,25 @@ function drawTimeline(host, period, rows) {
 
   const height = window.matchMedia('(max-width: 600px)').matches ? 210 : 260;
   const chart = stackedColumns({
-    width, height, bins: bins.map((b) => ({ label: b.axis, values: b.values })), categories, axisText: compact, minSlot: minSlot(),
+    width,
+    height,
+    bins: bins.map((b) => ({ label: b.axis, values: b.values })),
+    categories,
+    axisText: compact,
+    minSlot: minSlot(),
+    columns: timelineView !== 'line',
+    line: {
+      columns: null,
+      line: { colour: COMPARE_COLOURS.current, area: true },
+      both: { colour: LINE_OVER_COLUMNS, halo: true },
+    }[timelineView],
   });
   // The value axis stays put; the columns scroll sideways when they don't fit.
   const frame = el('div', 'timeline-chart');
   const scroller = el('div', `timeline-scroll${chart.scrolls ? ' scrolls' : ''}`);
   scroller.tabIndex = 0;
   scroller.setAttribute('role', 'img');
-  scroller.setAttribute('aria-label', `Expenses ${UNIT_TEXT[unit].toLowerCase()}; the table view lists every amount.`);
+  scroller.setAttribute('aria-label', `Expenses ${unitText(range, unit).toLowerCase()}; the table view lists every amount.`);
   scroller.append(chart.plot);
   const tip = el('div', 'chart-tip');
   tip.hidden = true;
@@ -914,6 +990,7 @@ function drawTimeline(host, period, rows) {
   });
   scroller.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
+    closeChartTips('timeline');
     showBin(binFromEvent(event));
     if (event.pointerType === 'mouse' && event.button === 0 && chart.scrolls) {
       drag = { x: event.clientX, left: scroller.scrollLeft, moved: false };
@@ -941,7 +1018,7 @@ function drawTimeline(host, period, rows) {
     }
   });
   scroller.addEventListener('blur', () => showBin(null));
-  hideTimelineTip = () => showBin(null);
+  chartTips.set('timeline', () => showBin(null));
 
   const legend = el('ul', 'chart-legend');
   for (const c of categories) {
@@ -952,7 +1029,8 @@ function drawTimeline(host, period, rows) {
     item.append(swatch, c.name);
     legend.append(item);
   }
-  host.replaceChildren(frame, legend);
+  // (A line alone has one colour; the tooltip names its categories.)
+  host.replaceChildren(...(timelineView === 'line' ? [frame] : [frame, legend]));
   // Columns that don't fit start at the newest ones while the period isn't over, otherwise at its start.
   if (chart.scrolls && ongoing(period)) scroller.scrollLeft = scroller.scrollWidth;
 }
@@ -978,9 +1056,12 @@ function timelineTableView(bins, categories) {
   return wrap;
 }
 
-// A tap anywhere else closes the columns' tooltip (the chart itself stops its own taps).
-let hideTimelineTip = null;
-document.addEventListener('pointerdown', () => hideTimelineTip?.());
+// A tap anywhere else closes a chart's tooltip (the charts stop their own taps, and close the others').
+const chartTips = new Map(); // Chart name -> closes its tooltip.
+function closeChartTips(except) {
+  for (const [name, close] of chartTips) if (name !== except) close();
+}
+document.addEventListener('pointerdown', () => closeChartTips());
 
 // Redraw the columns when the widget's width changes (turning the phone, resizing the window).
 new ResizeObserver(() => {
@@ -989,6 +1070,191 @@ new ResizeObserver(() => {
   timelineWidth = host.clientWidth;
   drawTimeline(host, timelineData.period, timelineData.rows);
 }).observe($('w-timeline'));
+
+// ---- Line charts ----
+
+const lineRedraws = new Map(); // Chart name -> { host, width, draw } for redrawing at another width.
+
+function drawOnWidth(name, host, draw) {
+  lineRedraws.set(name, { host, width: host.clientWidth, draw });
+  draw();
+}
+
+const lineResize = new ResizeObserver(() => {
+  for (const item of lineRedraws.values()) {
+    if (!item.host.isConnected || item.host.clientWidth === item.width) continue;
+    item.width = item.host.clientWidth;
+    item.draw();
+  }
+});
+lineResize.observe($('w-compare'));
+
+const lineHeight = () => (window.matchMedia('(max-width: 600px)').matches ? 190 : 220);
+
+// The chart with its tooltip. Mouse: follows the pointer. Finger: a tap shows that position (it stays until
+// a tap elsewhere), sliding sideways moves along the chart. fillTip(tip, i) writes the tooltip of a position.
+function lineFrame(name, chart, count, label, fillTip) {
+  const frame = el('div', 'line-chart');
+  frame.tabIndex = 0;
+  frame.setAttribute('role', 'img');
+  frame.setAttribute('aria-label', label);
+  const tip = el('div', 'chart-tip');
+  tip.hidden = true;
+  frame.append(chart.svg, tip);
+
+  let shown = null;
+  const show = (i) => {
+    shown = i;
+    chart.mark(i);
+    if (i === null) {
+      tip.hidden = true;
+      return;
+    }
+    fillTip(tip, i);
+    tip.hidden = false;
+    // Beside the position, on whichever side has room.
+    const x = chart.xOf(i);
+    const w = tip.offsetWidth;
+    const left = x + 14 + w <= frame.clientWidth ? x + 14 : x - 14 - w;
+    tip.style.left = `${Math.max(0, Math.min(left, frame.clientWidth - w))}px`;
+  };
+  const at = (event) => Math.min(count - 1, chart.at(event.clientX - frame.getBoundingClientRect().left));
+  frame.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'mouse' || event.buttons) show(at(event));
+  });
+  frame.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    closeChartTips(name);
+    show(at(event));
+  });
+  frame.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse') show(null);
+  });
+  frame.addEventListener('keydown', (event) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (step) {
+      event.preventDefault();
+      show(Math.min(count - 1, Math.max(0, (shown ?? (step > 0 ? -1 : count)) + step)));
+    } else if (event.key === 'Escape') {
+      show(null);
+    }
+  });
+  frame.addEventListener('blur', () => show(null));
+  chartTips.set(name, () => show(null));
+  return frame;
+}
+
+// ---- Period to period comparison: the running total of the current period, the one before and the same
+// one a year ago, day by day from each period's start ----
+
+// The periods to draw: [{ key, name, short, from, to }]. (Of a whole year, the period before is the same
+// as the one a year ago: one line.)
+function comparedPeriods(period) {
+  const list = [{ key: 'current', name: 'Current period', short: 'Current', from: period.from, to: period.to }];
+  if (period.kind === 'all') return list;
+  const firstDay = `${yearTitles.at(-1)}-01-01`; // Nothing is recorded before the oldest year tab.
+  const previous = shift(period, -1);
+  const yearAgo = periodYearsBefore(period, 1);
+  const same = previous.from === yearAgo.from && previous.to === yearAgo.to;
+  if (previous.from >= firstDay) {
+    list.push({ key: 'previous', name: same ? 'Previous period (a year ago)' : 'Previous period', short: 'Previous', from: previous.from, to: previous.to });
+  }
+  if (!same && yearAgo.from >= firstDay) {
+    list.push({ key: 'yearAgo', name: 'Same period a year ago', short: 'A year ago', from: yearAgo.from, to: yearAgo.to });
+  }
+  return list;
+}
+
+// Axis text for each day of the period: every day when it's short; otherwise only the first of each month,
+// and only the first of January over more than two years.
+function dayLabels(period) {
+  const days = daysBetween(period.from, period.to) + 1;
+  const manyYears = period.from.slice(0, 4) !== period.to.slice(0, 4);
+  const labels = [];
+  for (let i = 0; i < days; i++) {
+    const iso = addDays(period.from, i);
+    const day = Number(iso.slice(8));
+    if (days <= 92) labels.push(`${day} ${shortMonth(iso)}`);
+    else if (days > 732) labels.push(iso.slice(5) === '01-01' ? iso.slice(0, 4) : '');
+    else labels.push(day === 1 ? `${shortMonth(iso)}${manyYears ? ` '${iso.slice(2, 4)}` : ''}` : '');
+  }
+  return labels;
+}
+
+function renderCompare(period, rows, compared) {
+  const box = $('w-compare');
+  const host = el('div', 'timeline-host');
+  const legend = el('ul', 'compare-legend');
+  const note = el('p', 'widget-note muted');
+  box.replaceChildren(widgetHead('Period to period comparison', whoTag()), host, legend, note);
+
+  const perDay = new Map();
+  for (const row of rows) perDay.set(row.date, (perDay.get(row.date) || 0) + row.amounts[who]);
+  const current = between(rows, period.from, period.to);
+  const lastDay = period.from > todayIso() ? null : shownRange(period, current).to;
+
+  const series = comparedPeriods(period).map((p) => {
+    const end = p.key === 'current' ? lastDay : p.to;
+    const values = [];
+    let running = 0;
+    for (let iso = p.from; end && iso <= end; iso = addDays(iso, 1)) {
+      running += perDay.get(iso) || 0;
+      values.push(running);
+    }
+    return { ...p, values, colour: COMPARE_COLOURS[p.key] };
+  });
+
+  if (!series.some((s) => s.values.some((v) => Math.abs(v) >= 0.005))) {
+    host.replaceChildren(el('p', 'widget-empty muted', 'Nothing spent in these periods.'));
+    return;
+  }
+
+  // The amounts follow "Up to today / Whole periods"; the lines always show the earlier periods in full.
+  const cut = compared.days;
+  const amountEnd = (s) => (cut ? minIso(s.to, addDays(s.from, cut - 1)) : s.to);
+  const amountOf = (s) => sum(between(rows, s.from, amountEnd(s)));
+  const now = amountOf(series[0]);
+  for (const s of series) {
+    const amount = amountOf(s);
+    const swatch = el('span', 'legend-swatch series-bg');
+    swatch.style.setProperty('--c-light', s.colour[0]);
+    swatch.style.setProperty('--c-dark', s.colour[1]);
+    const name = el('span', 'compare-name');
+    name.append(el('span', null, s.name), el('span', 'muted', rangeText(s.from, amountEnd(s))));
+    const item = el('li');
+    item.append(swatch, name, el('span', 'compare-amount', money(amount)));
+    item.append(s.key === 'current' ? el('span') : deltaPill(change(now, amount)));
+    legend.append(item);
+  }
+  note.textContent = 'Running totals, day by day from the start of each period.'
+    + (cut ? ` The amounts cover the first ${plural(cut, 'day')} of each, as this period isn't over yet.` : '');
+
+  const count = Math.max(...series.map((s) => daysBetween(s.from, s.to) + 1));
+  const ownLabels = dayLabels(period);
+  const labels = Array.from({ length: count }, (_, i) => ownLabels[i] || '');
+  drawOnWidth('compare', host, () => {
+    const chart = lineChart({
+      width: host.clientWidth,
+      height: lineHeight(),
+      count,
+      labels,
+      // (The current period on top.)
+      lines: [...series].reverse().map((s) => ({ colour: s.colour, values: s.values, area: s.key === 'current' })),
+      axisText: compact,
+    });
+    host.replaceChildren(lineFrame('compare', chart, count, 'Running total of the current period, the period before and the same period a year ago; the list below gives their amounts.', (tip, i) => {
+      const grid = el('div', 'tip-grid');
+      for (const s of series) {
+        if (i >= s.values.length) continue;
+        const swatch = el('span', 'legend-swatch series-bg');
+        swatch.style.setProperty('--c-light', s.colour[0]);
+        swatch.style.setProperty('--c-dark', s.colour[1]);
+        grid.append(swatch, el('span', 'tip-name', `${s.short}, ${isoToBg(addDays(s.from, i)).slice(0, 5)}`), el('span', 'tip-value', money(s.values[i])));
+      }
+      tip.replaceChildren(el('div', 'tip-title', `Day ${i + 1}: spent so far`), grid);
+    }));
+  });
+}
 
 $('btn-signin').addEventListener('click', () =>
   run(async () => {

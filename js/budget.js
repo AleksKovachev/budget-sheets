@@ -49,15 +49,13 @@ export function convert(amount, year, currency) {
   return currency === 'EUR' ? amount / BGN_PER_EUR : amount * BGN_PER_EUR;
 }
 
-// What an entry cost each person, in its tab's currency: { [person key]: amount, combined: amount }.
-// A person's part: their own personal amounts, half of every shared amount (paid − personal, whoever paid),
-// and the other's cash in (money the other paid only for them). Together: everything paid plus cash in.
+// How much each person actually paid for an entry, in its tab's currency: { [person key]: amount, combined: amount }.
+// A person's amount: their paid and their cash in, both in full (personal is a part of paid, so it adds
+// nothing). Together: everything paid plus cash in.
 export function spending(entry) {
-  const shared = PEOPLE.reduce((sum, p) => sum + entry.money[p.key].paid - entry.money[p.key].personal, 0);
   const result = { combined: 0 };
   for (const person of PEOPLE) {
-    const other = PEOPLE.find((p) => p !== person);
-    result[person.key] = entry.money[person.key].personal + shared / 2 + entry.money[other.key].cashIn;
+    result[person.key] = entry.money[person.key].paid + entry.money[person.key].cashIn;
     result.combined += result[person.key];
   }
   return result;
